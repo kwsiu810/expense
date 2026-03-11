@@ -1,0 +1,86 @@
+version: '2'
+
+services:  
+
+    #postgres:
+        #image: postgres
+        #restart: always
+        #environment:
+        #- POSTGRES_USER=postgres
+        #- POSTGRES_PASSWORD=postgres123
+        #- POSTGRES_INITDB_ARGS="--auth-host=scram-sha-256"
+        #- POSTGRES_HOST_AUTH_METHOD=scram-sha-256
+        #ports:
+        #- "5432:5432"
+        #volumes:
+        #- pgdata:/var/lib/postgresql/data
+
+
+
+    frontend:       
+        image: mhart/alpine-node:14.17.3  
+        #image: mhart/alpine-node:12.19.0
+        restart: always        
+        ports:            
+        - "3000:3000"
+        working_dir: /frontend/src/app  
+        volumes:            
+        - ./frontend:/frontend/src/app
+        entrypoint: ["npm", "start"]      
+        links:            
+        - backend        
+        networks:            
+        - webappnetwork
+
+
+    backend:        
+        image: mhart/alpine-node:14.17.3 
+        #-image: mhart/alpine-node:8.11.4  
+        restart: always        
+        ports:            
+        - "9000:9000"
+        environment:
+        #- REDIS_URL=redis://cache
+        - PORT=9000
+        working_dir: /backend
+        volumes:            
+        - ./backend:/backend
+        entrypoint: ["npm", "start"]
+        #links:
+        #- redis    
+        networks:            
+        - webappnetwork
+
+  #redis:
+    #image: redis
+    #container_name: cache
+    #ports:
+      #- "6379:6379"
+    #expose:
+      #- 6379
+    #networks:
+      #- webappnetwork
+
+  #adminmongo:
+    #image: "mrvautin/adminmongo"
+    #ports:
+      #- "1234:1234"
+    #environment:
+      #- HOST=0.0.0.0
+    #networks:
+      #- webappnetwork
+
+networks:    
+  webappnetwork:        
+    driver: bridge
+
+
+#volumes:
+  #pgdata:
+    #driver: local
+    #driver_opts:
+      #type: 'none'
+      #o: 'bind'
+      #device: './db_data'
+      #device: '/Users/osx/development/db_data'
+  #cache:

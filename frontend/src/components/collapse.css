@@ -1,0 +1,45 @@
+
+.Collapsible {
+    background-color: rgb(241, 249, 252);
+  }
+  
+  .Collapsible__contentInner {
+    padding: 10px;
+    border: 1px solid #CCCCCC;
+    border-top: 0;
+  
+  
+  }
+  
+  .Collapsible__trigger {
+    display: block;
+    font-weight: 400;
+    text-decoration: none;
+    color: grey;
+    position: relative;
+    border: 1px solid white;
+    padding: 10px;
+    background: rgb(226, 226, 226);
+    color: rgb(49, 49, 49);
+  
+  
+  
+  }
+  
+  .CustomTriggerCSS {
+    background-color: lightcoral;
+    transition: background-color 200ms ease;
+    
+    
+  }
+  
+  .CustomTriggerCSS--open {
+    background-color: darkslateblue;
+  }
+  
+  .Collapsible__custom-sibling {
+    padding: 5px;
+    font-size: 12px;
+    background-color: #CBB700;
+    color: black;
+  }
