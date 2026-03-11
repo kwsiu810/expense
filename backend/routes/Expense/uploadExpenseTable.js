@@ -74,7 +74,144 @@ function detectDataType(values) {
     return "string";
 }
 
-// POST /api/upload
+// POST /api/upload - JSON body from database import
+router.post('/', express.json({ limit: '50mb' }), async function(req, res, next) {
+    // Check if this is a JSON request (database import)
+    if (req.body && req.body.source === 'database') {
+        var client = null;
+        try {
+            var data = req.body;
+            if (!data.headers || !data.rows) {
+                return res.status(400).json({ error: 'Invalid database import payload' });
+            }
+
+            var headers = data.headers;
+            var dataRows = data.rows;
+            var expenseId = data.expense_id;
+            var newExpenseName = data.new_expense_name;
+
+            if (!expenseId && !newExpenseName) {
+                return res.status(400).json({ error: 'Expense ID or new expense name is required' });
+            }
+            if (dataRows.length === 0) {
+                return res.status(400).json({ error: 'No data rows to import' });
+            }
+
+            console.log('Database import: ' + dataRows.length + ' rows, ' + headers.length + ' columns, expense: ' + (newExpenseName || expenseId));
+
+            client = await pool.connect();
+            await client.query('BEGIN');
+
+                // Get or create expense_table_id (same logic as CSV upload)
+                var expenseTableId = null;
+
+                if (newExpenseName) {
+                    var insertExpenseResult = await client.query(
+                        'INSERT INTO expense_table (name, version, upload_date) VALUES ($1, 0, NOW()) RETURNING id',
+                        [newExpenseName.trim()]
+                    );
+                    expenseTableId = insertExpenseResult.rows[0].id;
+                    await client.query('UPDATE expense_table SET parent_id = $1 WHERE id = $1', [expenseTableId]);
+                } else {
+                    var existingResult = await client.query('SELECT name FROM expense_table WHERE id = $1', [parseInt(expenseId)]);
+                    if (existingResult.rows.length === 0) { return res.status(400).json({ error: 'Expense ID not found' }); }
+                    var existingName = existingResult.rows[0].name;
+                    var versionResult = await client.query('SELECT COALESCE(MAX(version), -1) AS max_version FROM expense_table WHERE parent_id = $1', [parseInt(expenseId)]);
+                    var nextVersion = versionResult.rows[0].max_version + 1;
+                    var insertVersionResult = await client.query(
+                        'INSERT INTO expense_table (name, parent_id, version, upload_date) VALUES ($1, $2, $3, NOW()) RETURNING id',
+                        [existingName, parseInt(expenseId), nextVersion]
+                    );
+                    expenseTableId = insertVersionResult.rows[0].id;
+                }
+
+                // Detect data types
+                var columnValues = [];
+                for (var c = 0; c < headers.length; c++) { columnValues[c] = []; }
+                for (var r = 0; r < dataRows.length; r++) {
+                    for (var c = 0; c < headers.length; c++) { columnValues[c].push(dataRows[r][c] || ""); }
+                }
+
+                // Insert column names
+                for (var c = 0; c < headers.length; c++) {
+                    var dataType = detectDataType(columnValues[c]);
+                    await client.query(
+                        'INSERT INTO expense_table_column_name (expense_table_id, column_number, column_name, data_type, require_column_index) VALUES ($1, $2, $3, $4, false)',
+                        [expenseTableId, c, headers[c], dataType]
+                    );
+                }
+
+                // Insert data rows
+                var rowsInserted = 0;
+                var rowsSkipped = 0;
+                var checkDuplicates = !newExpenseName;
+
+                for (var r = 0; r < dataRows.length; r++) {
+                    var row = dataRows[r];
+                    var columnFields = ['expense_table_id', 'require_column_data'];
+                    var valuePlaceholders = ['$1', '$2'];
+                    var values = [expenseTableId, ''];
+                    var paramIndex = 3;
+                    var whereClauses = [];
+                    var checkValues = [];
+                    var checkParamIndex = 1;
+
+                    for (var c = 0; c < headers.length && c <= 60; c++) {
+                        var cellValue = row[c] || "";
+                        columnFields.push('column' + c);
+                        valuePlaceholders.push('$' + paramIndex);
+                        values.push(cellValue);
+                        paramIndex++;
+
+                        if (checkDuplicates) {
+                            if (cellValue === "") {
+                                whereClauses.push('(column' + c + ' IS NULL OR column' + c + " = '')");
+                            } else {
+                                whereClauses.push('column' + c + ' = $' + checkParamIndex);
+                                checkValues.push(cellValue);
+                                checkParamIndex++;
+                            }
+                        }
+                    }
+
+                    if (checkDuplicates) {
+                        var checkSql = 'SELECT 1 FROM content WHERE ' + whereClauses.join(' AND ') + ' LIMIT 1';
+                        var existsResult = await client.query(checkSql, checkValues);
+                        if (existsResult.rows.length > 0) { rowsSkipped++; continue; }
+                    }
+
+                    var sql = 'INSERT INTO content (' + columnFields.join(', ') + ') VALUES (' + valuePlaceholders.join(', ') + ')';
+                    await client.query(sql, values);
+                    rowsInserted++;
+                }
+
+                if (rowsInserted === 0) {
+                    await client.query('DELETE FROM expense_table_column_name WHERE expense_table_id = $1', [expenseTableId]);
+                    await client.query('DELETE FROM expense_table WHERE id = $1', [expenseTableId]);
+                    await client.query('COMMIT');
+                    return res.json({ message: 'No new rows to insert. All ' + rowsSkipped + ' rows already exist.', expense_table_id: null, rows_inserted: 0, rows_skipped: rowsSkipped, columns_mapped: 0 });
+                }
+
+                await client.query('COMMIT');
+                var message = 'Database import successful! Inserted ' + rowsInserted + ' rows with ' + headers.length + ' columns.';
+                if (rowsSkipped > 0) message += ' Skipped ' + rowsSkipped + ' duplicate rows.';
+                res.json({ message: message, expense_table_id: expenseTableId, rows_inserted: rowsInserted, rows_skipped: rowsSkipped, columns_mapped: headers.length });
+
+            } catch (err) {
+                if (client) await client.query('ROLLBACK');
+                console.log('Database import error:', err);
+                res.status(500).json({ error: err.message || 'Import failed' });
+            } finally {
+                if (client) client.release();
+            }
+            return;
+        }
+
+        // Not JSON / not database source - pass to multer file upload handler
+        next();
+    });
+
+// POST /api/upload - file upload via multer
 router.post('/', upload.single('file'), async function(req, res, next) {
 
     var client = null;

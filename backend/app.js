@@ -30,7 +30,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(cors());
 
 
-
+app.use('/expense/db_connection', require('./routes/Expense/Dbconnection'));
 
 
 
