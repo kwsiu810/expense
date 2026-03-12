@@ -1,6 +1,7 @@
 import React from "react"
 import Modal from "react-modal"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
 
 const CONFIGS_ENDPOINT = `${properties.backend}expense/save_report_config`
@@ -393,7 +394,7 @@ class ExpenseReports extends React.Component {
         }
     }
 
-    executeAction(configActionId) {
+    openSendEmail() {
         var filteredRows = this.getFilteredRows();
         var selectedIndices = Object.keys(this.state.selectedRows);
 
@@ -410,39 +411,42 @@ class ExpenseReports extends React.Component {
             }
         }
 
-        // Look up this action from this.state.configs (which comes from save_report_config and includes prompt_mode)
-        var isPrompt = false;
+        // Find the first available config action ID (for credentials)
+        var firstActionId = null;
         var activeId = this.state.activeConfigId;
         var configs = this.state.configs || [];
         for (var c = 0; c < configs.length; c++) {
             if (String(configs[c].id) === String(activeId)) {
                 var actions = configs[c].actions || [];
-                for (var a = 0; a < actions.length; a++) {
-                    if (String(actions[a].id) === String(configActionId)) {
-                        isPrompt = !!actions[a].prompt_mode;
-                        break;
-                    }
+                if (actions.length > 0) {
+                    firstActionId = actions[0].id;
                 }
                 break;
             }
         }
+        // Also check reportData actions
+        if (!firstActionId) {
+            var data = this.state.reportData;
+            var config = data && data.config ? data.config : {};
+            var rActions = config.actions || [];
+            if (rActions.length > 0) firstActionId = rActions[0].id;
+        }
 
-        console.log('executeAction:', { configActionId: configActionId, isPrompt: isPrompt });
-
-        if (isPrompt) {
-            this.setState({
-                promptModal: {
-                    configActionId: configActionId,
-                    selectedData: selectedData,
-                    email_to: '',
-                    subject: '',
-                    body: ''
-                }
-            });
+        if (!firstActionId) {
+            this.setState({ actionResult: { type: "error", message: "No email action module configured. Please set up an action in the Actions tab first." } });
             return;
         }
 
-        this.doSendAction(configActionId, selectedData, {});
+        this.setState({
+            promptModal: {
+                configActionId: firstActionId,
+                selectedData: selectedData,
+                email_to: '',
+                cc: '',
+                subject: '',
+                body: ''
+            }
+        });
     }
 
     doSendAction(configActionId, selectedData, promptFields) {
@@ -463,6 +467,7 @@ class ExpenseReports extends React.Component {
         if (promptFields.email_to) {
             payload.prompt_mode = true;
             payload.prompt_email_to = promptFields.email_to;
+            payload.prompt_cc = promptFields.cc || '';
             payload.prompt_subject = promptFields.subject || '';
             payload.prompt_body = promptFields.body || '';
         }
@@ -624,8 +629,6 @@ class ExpenseReports extends React.Component {
         var data = this.state.reportData;
         var config = data.config || {};
         var filteredRows = this.getFilteredRows();
-        var configActions = config.actions || [];
-        var hasAction = configActions.length > 0;
         var selectedCount = Object.keys(this.state.selectedRows).length;
         var selectableCount = 0;
         for (var sc = 0; sc < filteredRows.length; sc++) {
@@ -640,36 +643,28 @@ class ExpenseReports extends React.Component {
                     <span><strong>Report:</strong> {config.config_name}</span>
                     <span>&middot;</span>
                     <span><strong>Showing:</strong> {filteredRows.length} of {data.total_rows} rows</span>
-                    {hasAction && selectedCount > 0 && (
+                    {selectedCount > 0 && (
                         <span>&middot; <strong>{selectedCount} selected</strong></span>
                     )}
                 </div>
 
                 {this.renderFilters()}
 
-                {/* Action bar - multiple buttons */}
-                {hasAction && selectedCount > 0 && (
+                {/* Single Send Email button */}
+                {selectedCount > 0 && (
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", padding: "10px 14px", borderRadius: "6px", background: "#fafbfc", border: "1px solid #e2e6ed", flexWrap: "wrap" }}>
-                        {configActions.map((act, ai) => {
-                            var label = act.action_button_label || act.action_type || "Action " + (ai + 1);
-                            var icon = act.action_type === "send_email" ? "\u2709 " : act.action_type === "approve" ? "\u2713 " : act.action_type === "export" ? "\u21E9 " : act.action_type === "notify" ? "\uD83D\uDD14 " : "\u2699 ";
-                            var color = ACTION_COLORS[ai % ACTION_COLORS.length];
-                            return (
-                                <button
-                                    key={act.id}
-                                    style={{
-                                        padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
-                                        background: color.bg, color: "#fff",
-                                        cursor: this.state.executingAction ? "not-allowed" : "pointer",
-                                        opacity: this.state.executingAction ? 0.6 : 1
-                                    }}
-                                    onClick={() => this.executeAction(act.id)}
-                                    disabled={this.state.executingAction}
-                                >
-                                    {this.state.executingAction ? "Processing..." : icon + label + " (" + selectedCount + ")"}
-                                </button>
-                            );
-                        })}
+                        <button
+                            style={{
+                                padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
+                                background: "#052049", color: "#fff",
+                                cursor: this.state.executingAction ? "not-allowed" : "pointer",
+                                opacity: this.state.executingAction ? 0.6 : 1
+                            }}
+                            onClick={() => this.openSendEmail()}
+                            disabled={this.state.executingAction}
+                        >
+                            {this.state.executingAction ? "Processing..." : "\u2709 Send Email (" + selectedCount + ")"}
+                        </button>
                         <span style={{ fontSize: "12px", color: "#7c8ba1", cursor: "pointer", textDecoration: "underline", marginLeft: "4px" }} onClick={() => this.setState({ selectedRows: {} })}>Clear Selection</span>
                     </div>
                 )}
@@ -736,7 +731,7 @@ class ExpenseReports extends React.Component {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", minWidth: "400px" }}>
                         <thead>
                             <tr>
-                                {hasAction && (
+                                {(
                                     <th style={{ padding: "10px 8px", borderBottom: "2px solid #e2e6ed", background: "#052049", textAlign: "center", width: "36px" }}>
                                         <input type="checkbox" checked={allSelected} onChange={() => this.toggleSelectAll(filteredRows)} style={{ cursor: "pointer", width: "15px", height: "15px" }} />
                                     </th>
@@ -760,20 +755,20 @@ class ExpenseReports extends React.Component {
                         <tbody>
                             {filteredRows.length === 0 ? (
                                 <tr>
-                                    <td colSpan={data.columns.length + (hasAction ? 1 : 0)} style={{ padding: "20px", textAlign: "center", color: "#7c8ba1", fontSize: "13px" }}>
+                                    <td colSpan={data.columns.length + (1)} style={{ padding: "20px", textAlign: "center", color: "#7c8ba1", fontSize: "13px" }}>
                                         No rows match the current filters.
                                     </td>
                                 </tr>
                             ) : (
                                 filteredRows.map((row, ri) => {
                                     var isRowSelected = this.state.selectedRows[ri] ? true : false;
-                                    var isActioned = hasAction && this.isRowActioned(row);
+                                    var isActioned = this.isRowActioned(row);
                                     var actionInfo = isActioned ? this.getRowActionInfo(row) : null;
                                     var actionColor = isActioned ? this.getRowActionColor(row) : null;
                                     var rowBg = isActioned ? actionColor.light : (isRowSelected ? "#e8f0fe" : (ri % 2 === 0 ? "#fafbfc" : "#ffffff"));
                                     return (
                                     <tr key={ri} title={isActioned ? ("Completed by " + (actionInfo.employee_name || actionInfo.employee_id || "unknown")) : ""}>
-                                        {hasAction && (
+                                        {(
                                             <td style={{ padding: "8px 8px", borderBottom: "1px solid #e2e6ed", textAlign: "center", background: rowBg }}>
                                                 {isActioned ? (
                                                     <span title={"Completed by " + (actionInfo.employee_name || "") + (actionInfo.created_date ? " on " + new Date(actionInfo.created_date).toLocaleDateString() : "")} style={{ fontSize: "14px", color: actionColor.check }}>&#10003;</span>
@@ -828,6 +823,9 @@ class ExpenseReports extends React.Component {
                     </div>
                 </div>
 
+                {/* Nav */}
+                <ExpenseNav activeKey="reports" />
+
                 {/* Report tabs */}
                 {this.renderTabs()}
 
@@ -854,8 +852,8 @@ class ExpenseReports extends React.Component {
                 >
                     {this.state.promptModal && (
                         <div>
-                            <div style={{ fontSize: "16px", fontWeight: "700", color: "#052049", marginBottom: "4px" }}>&#9993; Send to Recipient</div>
-                            <div style={{ fontSize: "12px", color: "#7c8ba1", marginBottom: "18px" }}>{this.state.promptModal.selectedData.length} row(s) selected &middot; CSV will be attached &middot; Recipient gets a shared view link</div>
+                            <div style={{ fontSize: "16px", fontWeight: "700", color: "#052049", marginBottom: "4px" }}>&#9993; Send Email</div>
+                            <div style={{ fontSize: "12px", color: "#7c8ba1", marginBottom: "18px" }}>{this.state.promptModal.selectedData.length} row(s) selected &middot; CSV will be attached</div>
 
                             <div style={{ marginBottom: "12px" }}>
                                 <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Send To Email *</label>
@@ -864,6 +862,15 @@ class ExpenseReports extends React.Component {
                                     type="email" placeholder="recipient@ucsf.edu" autoFocus
                                     value={this.state.promptModal.email_to}
                                     onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { email_to: e.target.value }) })}
+                                />
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>CC</label>
+                                <input
+                                    style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }}
+                                    type="text" placeholder="cc1@ucsf.edu, cc2@ucsf.edu"
+                                    value={this.state.promptModal.cc}
+                                    onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { cc: e.target.value }) })}
                                 />
                             </div>
                             <div style={{ marginBottom: "12px" }}>
@@ -895,7 +902,7 @@ class ExpenseReports extends React.Component {
                                     disabled={!this.state.promptModal.email_to || this.state.executingAction}
                                     onClick={() => {
                                         var pm = this.state.promptModal;
-                                        this.doSendAction(pm.configActionId, pm.selectedData, { email_to: pm.email_to, subject: pm.subject, body: pm.body });
+                                        this.doSendAction(pm.configActionId, pm.selectedData, { email_to: pm.email_to, cc: pm.cc, subject: pm.subject, body: pm.body });
                                     }}
                                 >{this.state.executingAction ? "Sending..." : "Send Email"}</button>
                             </div>

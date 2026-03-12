@@ -1,11 +1,11 @@
 import React from "react"
 
 const NAV_ITEMS = [
-    { key: "upload", label: "Upload", path: "/expense-upload" },
+    { key: "upload", label: "Upload Data", path: "/expense-upload" },
     { key: "configuration", label: "Configuration", path: "/expense-report-config" },
-    { key: "preview", label: "Preview", path: "/expense-report-preview" },
+    { key: "preview", label: "View Configuration", path: "/expense-report-preview" },
+    { key: "reports", label: "Send for review", path: "/expense-reports", newTab: false },
     { key: "admin", label: "Response", path: "/expense-report-admin" },
-    { key: "reports", label: "Reports", path: "/expense-reports", newTab: true }
 ];
 
 function ExpenseNav(props) {

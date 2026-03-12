@@ -1,4 +1,5 @@
 import React from "react"
+import Modal from "react-modal"
 import ucsfLogo from './images/ucsfHealth.jpg'
 import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
@@ -6,6 +7,7 @@ import { properties } from '../../properties/properties.js'
 const CONFIGS_ENDPOINT = `${properties.backend}expense/save_report_config`
 const PREVIEW_ENDPOINT = `${properties.backend}expense/get_report_preview/`
 const ACTION_LOG_ENDPOINT = `${properties.backend}expense/send_email/logs/`
+const EXECUTE_ENDPOINT = `${properties.backend}expense/send_email`
 
 const ACTION_COLORS = [
     { bg: "#052049", light: "#e8edf5", text: "#052049", check: "#052049" },
@@ -39,7 +41,13 @@ class ExpenseReportAdmin extends React.Component {
             // Action logs: { rowHash: [ { employee_name, action_type, created_date, ... }, ... ] }
             actionLogsByHash: {},
             // Expanded rows
-            expandedRows: {}
+            expandedRows: {},
+            // Row selection
+            selectedRows: {},
+            // Email
+            executingAction: false,
+            actionResult: null,
+            promptModal: null
         };
         this.tableRef = React.createRef();
     }
@@ -175,7 +183,7 @@ class ExpenseReportAdmin extends React.Component {
 
             newFilters = this.validateFilters(newFilters, data);
 
-            this.setState({ activeConfigId: configId, reportData: data, filters: newFilters, expandedRows: {} }, () => {
+            this.setState({ activeConfigId: configId, reportData: data, filters: newFilters, expandedRows: {}, selectedRows: {}, actionResult: null }, () => {
                 setTimeout(() => this.checkScrollButtons(), 100);
                 this.fetchActionLogs(configId);
             });
@@ -300,6 +308,8 @@ class ExpenseReportAdmin extends React.Component {
     }
 
     getActionColorIndex(actionType) {
+        // "Done" always gets green (index 1)
+        if (actionType === 'Done') return 1;
         var data = this.state.reportData;
         var config = data && data.config ? data.config : {};
         var actions = config.actions || [];
@@ -318,6 +328,14 @@ class ExpenseReportAdmin extends React.Component {
         return this.getRowLogs(row).length > 0;
     }
 
+    isRowDone(row) {
+        var logs = this.getRowLogs(row);
+        for (var i = 0; i < logs.length; i++) {
+            if (logs[i].action_type === 'Done') return true;
+        }
+        return false;
+    }
+
     toggleExpand(ri) {
         var expanded = Object.assign({}, this.state.expandedRows);
         if (expanded[ri]) {
@@ -326,6 +344,152 @@ class ExpenseReportAdmin extends React.Component {
             expanded[ri] = true;
         }
         this.setState({ expandedRows: expanded });
+    }
+
+    toggleRowSelect(ri) {
+        var filteredRows = this.getFilteredRows();
+        var row = filteredRows[ri];
+        if (row && this.isRowDone(row)) return; // only skip Done rows
+
+        var selected = Object.assign({}, this.state.selectedRows);
+        if (selected[ri]) {
+            delete selected[ri];
+        } else {
+            selected[ri] = true;
+        }
+        this.setState({ selectedRows: selected });
+    }
+
+    toggleSelectAll(filteredRows) {
+        var selectedCount = Object.keys(this.state.selectedRows).length;
+        var selectableCount = 0;
+        for (var i = 0; i < filteredRows.length; i++) {
+            if (!this.isRowDone(filteredRows[i])) selectableCount++;
+        }
+        if (selectedCount === selectableCount && selectableCount > 0) {
+            this.setState({ selectedRows: {} });
+        } else {
+            var selected = {};
+            for (var i = 0; i < filteredRows.length; i++) {
+                if (!this.isRowDone(filteredRows[i])) {
+                    selected[i] = true;
+                }
+            }
+            this.setState({ selectedRows: selected });
+        }
+    }
+
+    openSendEmail() {
+        var filteredRows = this.getFilteredRows();
+        var selectedIndices = Object.keys(this.state.selectedRows);
+
+        if (selectedIndices.length === 0) {
+            this.setState({ actionResult: { type: "error", message: "Please select at least one row." } });
+            return;
+        }
+
+        var selectedData = [];
+        for (var i = 0; i < selectedIndices.length; i++) {
+            var idx = parseInt(selectedIndices[i]);
+            if (filteredRows[idx]) {
+                selectedData.push(filteredRows[idx]);
+            }
+        }
+
+        // Find first available config action ID (for credentials)
+        var firstActionId = null;
+        var activeId = this.state.activeConfigId;
+        var configs = this.state.configs || [];
+        for (var c = 0; c < configs.length; c++) {
+            if (String(configs[c].id) === String(activeId)) {
+                var actions = configs[c].actions || [];
+                if (actions.length > 0) firstActionId = actions[0].id;
+                break;
+            }
+        }
+        if (!firstActionId) {
+            var data = this.state.reportData;
+            var config = data && data.config ? data.config : {};
+            var rActions = config.actions || [];
+            if (rActions.length > 0) firstActionId = rActions[0].id;
+        }
+
+        if (!firstActionId) {
+            this.setState({ actionResult: { type: "error", message: "No email action module configured. Please set up an action in the Actions tab first." } });
+            return;
+        }
+
+        // Get available columns
+        var data = this.state.reportData;
+        var columns = data && data.columns ? data.columns.map(function(c) { return c.column_name; }) : [];
+        var csvCols = {};
+        for (var ci = 0; ci < columns.length; ci++) { csvCols[columns[ci]] = true; }
+
+        this.setState({
+            promptModal: {
+                configActionId: firstActionId,
+                selectedData: selectedData,
+                allColumns: columns,
+                csvColumns: csvCols,
+                email_to: '',
+                cc: '',
+                subject: '',
+                body: ''
+            }
+        });
+    }
+
+    doSendAction(promptFields) {
+        var pm = this.state.promptModal;
+        if (!pm) return;
+
+        // Build csv_columns array from selected columns
+        var csvColumns = [];
+        var allCols = pm.allColumns || [];
+        var csvColMap = pm.csvColumns || {};
+        for (var i = 0; i < allCols.length; i++) {
+            if (csvColMap[allCols[i]]) csvColumns.push(allCols[i]);
+        }
+
+        this.setState({ executingAction: true, actionResult: null, promptModal: null });
+
+        var payload = {
+            config_id: this.state.activeConfigId,
+            config_action_id: pm.configActionId,
+            selected_rows: pm.selectedData,
+            csv_columns: csvColumns,
+            employee_id: '',
+            employee_name: 'Admin',
+            employee_title: '',
+            employee_department: '',
+            base_url: window.location.origin,
+            skip_shared_view: true,
+            prompt_mode: true,
+            prompt_action_type: 'Done',
+            prompt_email_to: promptFields.email_to,
+            prompt_cc: promptFields.cc || '',
+            prompt_subject: promptFields.subject || '',
+            prompt_body: promptFields.body || ''
+        };
+
+        fetch(EXECUTE_ENDPOINT, {
+            method: "POST",
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json().then(data => {
+            if (!response.ok) throw new Error(data.error || "Action failed");
+            return data;
+        }))
+        .then(data => {
+            var resultType = data.failed > 0 ? "warning" : "success";
+            this.setState({ executingAction: false, selectedRows: {}, actionResult: { type: resultType, message: data.message, shared_link: data.shared_link } }, () => {
+                this.fetchActionLogs(this.state.activeConfigId);
+            });
+        })
+        .catch(err => {
+            this.setState({ executingAction: false, actionResult: { type: "error", message: err.message || "Action failed." } });
+        });
     }
 
     checkScrollButtons() {
@@ -465,13 +629,22 @@ class ExpenseReportAdmin extends React.Component {
         var data = this.state.reportData;
         var config = data.config || {};
         var filteredRows = this.getFilteredRows();
-        var colSpan = data.columns.length + 1; // +1 for expand column
+        var colSpan = data.columns.length + 2; // +1 expand +1 checkbox
+        var selectedCount = Object.keys(this.state.selectedRows).length;
 
         // Count rows with actions
         var actionedCount = 0;
         for (var ac = 0; ac < filteredRows.length; ac++) {
             if (this.hasRowLogs(filteredRows[ac])) actionedCount++;
         }
+
+        var allSelected = false;
+        var doneCount = 0;
+        for (var dc = 0; dc < filteredRows.length; dc++) {
+            if (this.isRowDone(filteredRows[dc])) doneCount++;
+        }
+        var selectableCount = filteredRows.length - doneCount;
+        if (selectableCount > 0 && selectedCount === selectableCount) allSelected = true;
 
         return (
             <div>
@@ -484,9 +657,46 @@ class ExpenseReportAdmin extends React.Component {
                     <span><strong>Actioned:</strong> {actionedCount}</span>
                     <span>&middot;</span>
                     <span><strong>Pending:</strong> {filteredRows.length - actionedCount}</span>
+                    {selectedCount > 0 && (
+                        <span>&middot; <strong>{selectedCount} selected</strong></span>
+                    )}
                 </div>
 
                 {this.renderFilters()}
+
+                {/* Send Email button */}
+                {selectedCount > 0 && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", padding: "10px 14px", borderRadius: "6px", background: "#fafbfc", border: "1px solid #e2e6ed", flexWrap: "wrap" }}>
+                        <button
+                            style={{
+                                padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
+                                background: "#052049", color: "#fff",
+                                cursor: this.state.executingAction ? "not-allowed" : "pointer",
+                                opacity: this.state.executingAction ? 0.6 : 1
+                            }}
+                            onClick={() => this.openSendEmail()}
+                            disabled={this.state.executingAction}
+                        >
+                            {this.state.executingAction ? "Processing..." : "\u2709 Send Email (" + selectedCount + ")"}
+                        </button>
+                        <span style={{ fontSize: "12px", color: "#7c8ba1", cursor: "pointer", textDecoration: "underline", marginLeft: "4px" }} onClick={() => this.setState({ selectedRows: {} })}>Clear Selection</span>
+                    </div>
+                )}
+
+                {/* Action result */}
+                {this.state.actionResult && (
+                    <div style={{
+                        display: "flex", flexDirection: "column", gap: "6px", padding: "12px 16px", borderRadius: "6px", fontSize: "13px", marginBottom: "14px",
+                        background: this.state.actionResult.type === "success" ? "#eaf7f0" : (this.state.actionResult.type === "warning" ? "#fff8e1" : "#fdf0f0"),
+                        color: this.state.actionResult.type === "success" ? "#2a6e4a" : (this.state.actionResult.type === "warning" ? "#8a6d00" : "#d64545"),
+                        border: this.state.actionResult.type === "success" ? "1px solid #c2e3d3" : (this.state.actionResult.type === "warning" ? "1px solid #ffe082" : "1px solid #f0c2c2")
+                    }}>
+                        <span style={{ fontWeight: "600" }}>{this.state.actionResult.message}</span>
+                        {this.state.actionResult.shared_link && (
+                            <span style={{ fontSize: "12px" }}>Shared view: <a href={this.state.actionResult.shared_link} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", fontWeight: "600" }}>{this.state.actionResult.shared_link}</a></span>
+                        )}
+                    </div>
+                )}
 
                 {/* Data table */}
                 <div style={{ position: "relative" }}>
@@ -518,6 +728,9 @@ class ExpenseReportAdmin extends React.Component {
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                         <thead>
                             <tr style={{ background: "#052049" }}>
+                                <th style={{ padding: "10px 8px", color: "#ffffff", fontWeight: "600", textAlign: "center", whiteSpace: "nowrap", width: "36px" }}>
+                                    <input type="checkbox" checked={allSelected} onChange={() => this.toggleSelectAll(filteredRows)} style={{ cursor: "pointer", width: "15px", height: "15px" }} />
+                                </th>
                                 <th style={{ padding: "10px 8px", color: "#ffffff", fontWeight: "600", textAlign: "center", whiteSpace: "nowrap", width: "40px", position: "sticky", left: 0, background: "#052049", zIndex: 1 }}>
                                     {/* expand column */}
                                 </th>
@@ -540,24 +753,40 @@ class ExpenseReportAdmin extends React.Component {
                                     var rowLogs = this.getRowLogs(row);
                                     var hasLogs = rowLogs.length > 0;
                                     var isExpanded = this.state.expandedRows[ri] ? true : false;
+                                    var isRowSelected = this.state.selectedRows[ri] ? true : false;
+                                    var isDone = this.isRowDone(row);
 
                                     // Determine row background based on action status
                                     var actionColor = null;
                                     var rowBg = ri % 2 === 0 ? "#fafbfc" : "#ffffff";
-                                    if (hasLogs) {
-                                        // Use color of first (most recent) action
+                                    if (isDone) {
+                                        actionColor = ACTION_COLORS[1]; // green
+                                        rowBg = actionColor.light;
+                                    } else if (hasLogs) {
                                         var firstActionType = rowLogs[0].action_type;
                                         var colorIdx = this.getActionColorIndex(firstActionType);
                                         actionColor = ACTION_COLORS[colorIdx];
                                         rowBg = actionColor.light;
+                                    }
+                                    if (!isDone && isRowSelected) {
+                                        rowBg = "#e8f0fe";
                                     }
 
                                     var result = [];
 
                                     // Main row
                                     result.push(
-                                        <tr key={'row-' + ri} style={{ cursor: hasLogs ? "pointer" : "default" }} onClick={() => { if (hasLogs) this.toggleExpand(ri); }}>
-                                            <td style={{ padding: "8px 8px", borderBottom: "1px solid #e2e6ed", textAlign: "center", background: rowBg, position: "sticky", left: 0, zIndex: 1 }}>
+                                        <tr key={'row-' + ri} style={{ cursor: hasLogs ? "pointer" : "default" }}>
+                                            <td style={{ padding: "8px 8px", borderBottom: "1px solid #e2e6ed", textAlign: "center", background: rowBg }}
+                                                onClick={(e) => { e.stopPropagation(); if (!isDone) this.toggleRowSelect(ri); }}>
+                                                {isDone ? (
+                                                    <span style={{ fontSize: "14px", color: "#0e7c3a", fontWeight: "700" }}>&#10003;</span>
+                                                ) : (
+                                                    <input type="checkbox" checked={isRowSelected} onChange={() => {}} style={{ cursor: "pointer", width: "15px", height: "15px" }} />
+                                                )}
+                                            </td>
+                                            <td style={{ padding: "8px 8px", borderBottom: "1px solid #e2e6ed", textAlign: "center", background: rowBg, position: "sticky", left: 0, zIndex: 1 }}
+                                                onClick={() => { if (hasLogs) this.toggleExpand(ri); }}>
                                                 {hasLogs ? (
                                                     <span style={{
                                                         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -677,6 +906,112 @@ class ExpenseReportAdmin extends React.Component {
                 <div style={{ maxWidth: "1200px", margin: "30px auto", padding: "0 20px" }}>
                     {this.renderReport()}
                 </div>
+
+                {/* Send Email Modal */}
+                <Modal
+                    isOpen={this.state.promptModal !== null}
+                    onRequestClose={() => this.setState({ promptModal: null })}
+                    ariaHideApp={false}
+                    style={{
+                        overlay: { backgroundColor: "rgba(0,0,0,0.5)", zIndex: 9999 },
+                        content: {
+                            top: "50%", left: "50%", right: "auto", bottom: "auto",
+                            transform: "translate(-50%, -50%)",
+                            maxWidth: "520px", width: "90%", borderRadius: "10px",
+                            padding: "28px", border: "none",
+                            boxShadow: "0 8px 30px rgba(0,0,0,0.2)"
+                        }
+                    }}
+                >
+                    {this.state.promptModal && (
+                        <div>
+                            <div style={{ fontSize: "16px", fontWeight: "700", color: "#052049", marginBottom: "4px" }}>&#9993; Send Email</div>
+                            <div style={{ fontSize: "12px", color: "#7c8ba1", marginBottom: "14px" }}>{this.state.promptModal.selectedData.length} row(s) selected &middot; CSV will be attached</div>
+
+                            {/* CSV Column Selection */}
+                            <div style={{ marginBottom: "14px", padding: "12px", background: "#f8f9fb", borderRadius: "6px", border: "1px solid #e2e6ed" }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                                    <label style={{ fontSize: "12px", fontWeight: "600", color: "#052049" }}>CSV Columns ({(() => { var c = 0; var m = this.state.promptModal.csvColumns || {}; for (var k in m) { if (m[k]) c++; } return c; })()} of {(this.state.promptModal.allColumns || []).length})</label>
+                                    <div style={{ display: "flex", gap: "8px" }}>
+                                        <span style={{ fontSize: "11px", color: "#052049", fontWeight: "600", cursor: "pointer", textDecoration: "underline" }}
+                                            onClick={() => { var cols = {}; var all = this.state.promptModal.allColumns || []; for (var i = 0; i < all.length; i++) cols[all[i]] = true; this.setState({ promptModal: Object.assign({}, this.state.promptModal, { csvColumns: cols }) }); }}>All</span>
+                                        <span style={{ fontSize: "11px", color: "#052049", fontWeight: "600", cursor: "pointer", textDecoration: "underline" }}
+                                            onClick={() => { this.setState({ promptModal: Object.assign({}, this.state.promptModal, { csvColumns: {} }) }); }}>None</span>
+                                    </div>
+                                </div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", maxHeight: "120px", overflowY: "auto" }}>
+                                    {(this.state.promptModal.allColumns || []).map((col, ci) => {
+                                        var isOn = this.state.promptModal.csvColumns[col] || false;
+                                        return (
+                                            <label key={ci} style={{
+                                                display: "inline-flex", alignItems: "center", gap: "3px", padding: "3px 8px", borderRadius: "4px", fontSize: "11px", cursor: "pointer",
+                                                background: isOn ? "#e8f0fe" : "#f0f0f0", border: isOn ? "1px solid #052049" : "1px solid #e2e6ed",
+                                                color: isOn ? "#052049" : "#999", fontWeight: isOn ? "600" : "400"
+                                            }}>
+                                                <input type="checkbox" checked={isOn}
+                                                    onChange={() => { var cols = Object.assign({}, this.state.promptModal.csvColumns); cols[col] = !cols[col]; this.setState({ promptModal: Object.assign({}, this.state.promptModal, { csvColumns: cols }) }); }}
+                                                    style={{ width: "11px", height: "11px", cursor: "pointer" }} />
+                                                {col}
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Send To Email *</label>
+                                <input
+                                    style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }}
+                                    type="email" placeholder="recipient@ucsf.edu" autoFocus
+                                    value={this.state.promptModal.email_to}
+                                    onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { email_to: e.target.value }) })}
+                                />
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>CC</label>
+                                <input
+                                    style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }}
+                                    type="text" placeholder="cc1@ucsf.edu, cc2@ucsf.edu"
+                                    value={this.state.promptModal.cc}
+                                    onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { cc: e.target.value }) })}
+                                />
+                            </div>
+                            <div style={{ marginBottom: "12px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Subject</label>
+                                <input
+                                    style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }}
+                                    type="text" placeholder="Expense Report Data"
+                                    value={this.state.promptModal.subject}
+                                    onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { subject: e.target.value }) })}
+                                />
+                            </div>
+                            <div style={{ marginBottom: "18px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Body (optional)</label>
+                                <textarea
+                                    style={{ width: "100%", padding: "10px 12px", fontSize: "13px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box", minHeight: "80px", fontFamily: "inherit", resize: "vertical" }}
+                                    placeholder="Optional message to include in the email..."
+                                    value={this.state.promptModal.body}
+                                    onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { body: e.target.value }) })}
+                                />
+                            </div>
+
+                            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                                <button
+                                    style={{ padding: "10px 20px", fontSize: "13px", fontWeight: "600", border: "1px solid #e2e6ed", borderRadius: "6px", background: "#fff", color: "#2c3345", cursor: "pointer" }}
+                                    onClick={() => this.setState({ promptModal: null })}
+                                >Cancel</button>
+                                <button
+                                    style={{ padding: "10px 24px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px", background: this.state.promptModal.email_to ? "#052049" : "#ccc", color: "#fff", cursor: this.state.promptModal.email_to ? "pointer" : "not-allowed" }}
+                                    disabled={!this.state.promptModal.email_to || this.state.executingAction}
+                                    onClick={() => {
+                                        var pm = this.state.promptModal;
+                                        this.doSendAction({ email_to: pm.email_to, cc: pm.cc, subject: pm.subject, body: pm.body });
+                                    }}
+                                >{this.state.executingAction ? "Sending..." : "Send Email"}</button>
+                            </div>
+                        </div>
+                    )}
+                </Modal>
             </div>
         );
     }

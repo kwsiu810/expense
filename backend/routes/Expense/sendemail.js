@@ -83,7 +83,7 @@ function generateCsv(rows) {
 }
 
 // Send email via Microsoft Graph API with optional attachment
-function sendGraphEmail(accessToken, senderEmail, toEmail, subject, bodyHtml, attachment) {
+function sendGraphEmail(accessToken, senderEmail, toEmail, subject, bodyHtml, attachment, ccEmails) {
     return new Promise(function(resolve, reject) {
         var message = {
             subject: subject,
@@ -99,6 +99,13 @@ function sendGraphEmail(accessToken, senderEmail, toEmail, subject, bodyHtml, at
                 }
             ]
         };
+
+        // Add CC recipients if provided
+        if (ccEmails && ccEmails.length > 0) {
+            message.ccRecipients = ccEmails.map(function(email) {
+                return { emailAddress: { address: email.trim() } };
+            });
+        }
 
         if (attachment) {
             message.attachments = [
@@ -229,16 +236,10 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
     var selectedRows = req.body.selected_rows || req.body.rows || [];
 
     // Read employee info from session headers (try multiple formats), fallback to request body
-    //var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '';
-    //var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || '';
-    //var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || '';
-    //var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || '';
-
-    var employeeId = '020444253';
-    var employeeName = 'Keith Siu';
-    var employeeTitle = 'Sr. Clinical Comm Analyst';
-    var employeeDepartment = 'CS Clinical Communications';
-
+    var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '';
+    var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || '';
+    var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || '';
+    var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || '';
 
     console.log('Send email - employee info:', { employeeId, employeeName, employeeTitle, employeeDepartment });
 
@@ -301,6 +302,10 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             bodyTemplate = columnMapping.body_template || "";
         }
 
+        // Parse CC emails (comma-separated)
+        var ccRaw = req.body.prompt_cc || '';
+        var ccEmails = ccRaw ? ccRaw.split(',').map(function(e) { return e.trim(); }).filter(function(e) { return e; }) : [];
+
         if (!fixedEmailTo) {
             if (isPromptMode) {
                 return res.status(400).json({ error: 'This action requires you to provide an email address. The prompt dialog should have appeared — please try again.' });
@@ -327,8 +332,21 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             fullDataRows.push(row._full_data || clean);
         }
 
-        // 3b. Generate CSV from clean display rows
-        var csvContent = generateCsv(cleanRows);
+        // 3b. Filter columns for CSV if csv_columns specified
+        var csvColumns = req.body.csv_columns || null;
+        var csvRows = cleanRows;
+        if (csvColumns && Array.isArray(csvColumns) && csvColumns.length > 0) {
+            csvRows = cleanRows.map(function(row) {
+                var filtered = {};
+                for (var c = 0; c < csvColumns.length; c++) {
+                    filtered[csvColumns[c]] = row[csvColumns[c]] || '';
+                }
+                return filtered;
+            });
+        }
+
+        // 3c. Generate CSV
+        var csvContent = generateCsv(csvRows);
         var csvBase64 = Buffer.from(csvContent, 'utf-8').toString('base64');
 
         // 3c. Create shared view record (skip if called from shared view page)
@@ -396,7 +414,7 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
 
         // 6. Send single email with CSV attachment
         try {
-            await sendGraphEmail(accessToken, actionConfig.sender_email, fixedEmailTo, subject, body, attachment);
+            await sendGraphEmail(accessToken, actionConfig.sender_email, fixedEmailTo, subject, body, attachment, ccEmails);
 
             // 7. Save action log for each row (hash clean row, store full data)
             var sharedViewToken = req.body.shared_view_token || null;
@@ -406,7 +424,7 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
                 try {
                     await pool.query(
                         'INSERT INTO report_action_log (report_config_id, report_config_action_id, employee_id, employee_name, employee_title, employee_department, row_hash, row_data, action_type, shared_view_token) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-                        [configId, configActionId, employeeId, employeeName, employeeTitle, employeeDepartment, rowHash, JSON.stringify(fullDataRows[i]), actionRow.action_type || 'send_email', sharedViewToken]
+                        [configId, configActionId, employeeId, employeeName, employeeTitle, employeeDepartment, rowHash, JSON.stringify(fullDataRows[i]), req.body.prompt_action_type || actionRow.action_type || 'send_email', sharedViewToken]
                     );
                     loggedHashes.push(rowHash);
                 } catch (logErr) {
