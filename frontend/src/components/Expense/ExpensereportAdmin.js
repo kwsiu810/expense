@@ -414,12 +414,7 @@ class ExpenseReportAdmin extends React.Component {
             if (rActions.length > 0) firstActionId = rActions[0].id;
         }
 
-        if (!firstActionId) {
-            this.setState({ actionResult: { type: "error", message: "No email action module configured. Please set up an action in the Actions tab first." } });
-            return;
-        }
-
-        // Get available columns
+        // Get available columns — open modal regardless, backend finds credentials
         var data = this.state.reportData;
         var columns = data && data.columns ? data.columns.map(function(c) { return c.column_name; }) : [];
         var csvCols = {};
@@ -455,7 +450,7 @@ class ExpenseReportAdmin extends React.Component {
 
         var payload = {
             config_id: this.state.activeConfigId,
-            config_action_id: pm.configActionId,
+            config_action_id: pm.configActionId || 0,
             selected_rows: pm.selectedData,
             csv_columns: csvColumns,
             employee_id: '',
@@ -819,20 +814,20 @@ class ExpenseReportAdmin extends React.Component {
                                     if (isExpanded && hasLogs) {
                                         result.push(
                                             <tr key={'detail-' + ri}>
-                                                <td colSpan={colSpan} style={{ padding: 0, borderBottom: "2px solid #052049" }}>
-                                                    <div style={{ margin: "0", padding: "12px 16px 12px 50px", background: "#f8f9fb" }}>
+                                                <td colSpan={colSpan} style={{ padding: 0, borderBottom: "2px solid #052049", position: "relative" }}>
+                                                    <div style={{ position: "sticky", left: 0, width: "calc(100vw - 120px)", maxWidth: "900px", padding: "12px 16px 12px 50px", background: "#f8f9fb", boxSizing: "border-box" }}>
                                                         <div style={{ fontSize: "11px", fontWeight: "700", color: "#7c8ba1", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
                                                             Action History ({rowLogs.length})
                                                         </div>
-                                                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                                                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", tableLayout: "auto" }}>
                                                             <thead>
                                                                 <tr style={{ borderBottom: "1px solid #e2e6ed" }}>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>Action</th>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>Employee</th>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>ID</th>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>Title</th>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>Department</th>
-                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600" }}>Date</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Action</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Employee</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>ID</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Title</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Department</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Date</th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
@@ -841,7 +836,7 @@ class ExpenseReportAdmin extends React.Component {
                                                                     var logColor = ACTION_COLORS[logColorIdx];
                                                                     return (
                                                                         <tr key={li} style={{ borderBottom: "1px solid #eef0f4" }}>
-                                                                            <td style={{ padding: "7px 10px" }}>
+                                                                            <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
                                                                                 <span style={{
                                                                                     display: "inline-block", padding: "2px 10px", borderRadius: "10px", fontSize: "11px", fontWeight: "700",
                                                                                     background: logColor.light, color: logColor.text, border: "1px solid " + logColor.text + "33"
@@ -849,11 +844,11 @@ class ExpenseReportAdmin extends React.Component {
                                                                                     {log.action_type}
                                                                                 </span>
                                                                             </td>
-                                                                            <td style={{ padding: "7px 10px", color: "#2c3345", fontWeight: "500" }}>{log.employee_name || "\u2014"}</td>
-                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1" }}>{log.employee_id || "\u2014"}</td>
-                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1" }}>{log.employee_title || "\u2014"}</td>
-                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1" }}>{log.employee_department || "\u2014"}</td>
-                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1" }}>{this.formatDate(log.created_date)}</td>
+                                                                            <td style={{ padding: "7px 10px", color: "#2c3345", fontWeight: "500", whiteSpace: "nowrap" }}>{log.employee_name || "\u2014"}</td>
+                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{log.employee_id || "\u2014"}</td>
+                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{log.employee_title || "\u2014"}</td>
+                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{log.employee_department || "\u2014"}</td>
+                                                                            <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{this.formatDate(log.created_date)}</td>
                                                                         </tr>
                                                                     );
                                                                 })}

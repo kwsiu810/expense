@@ -411,20 +411,17 @@ class ExpenseReports extends React.Component {
             }
         }
 
-        // Find the first available config action ID (for credentials)
+        // Find a config action ID if available (for credentials), but don't require it
         var firstActionId = null;
         var activeId = this.state.activeConfigId;
         var configs = this.state.configs || [];
         for (var c = 0; c < configs.length; c++) {
             if (String(configs[c].id) === String(activeId)) {
                 var actions = configs[c].actions || [];
-                if (actions.length > 0) {
-                    firstActionId = actions[0].id;
-                }
+                if (actions.length > 0) firstActionId = actions[0].id;
                 break;
             }
         }
-        // Also check reportData actions
         if (!firstActionId) {
             var data = this.state.reportData;
             var config = data && data.config ? data.config : {};
@@ -432,11 +429,7 @@ class ExpenseReports extends React.Component {
             if (rActions.length > 0) firstActionId = rActions[0].id;
         }
 
-        if (!firstActionId) {
-            this.setState({ actionResult: { type: "error", message: "No email action module configured. Please set up an action in the Actions tab first." } });
-            return;
-        }
-
+        // Open modal regardless — backend will find credentials if config_action_id is missing
         this.setState({
             promptModal: {
                 configActionId: firstActionId,
@@ -454,7 +447,7 @@ class ExpenseReports extends React.Component {
 
         var payload = {
             config_id: this.state.activeConfigId,
-            config_action_id: configActionId,
+            config_action_id: configActionId || 0,
             selected_rows: selectedData,
             employee_id: this.state.employeeInfo.employee_id || '',
             employee_name: this.state.employeeInfo.employee_name || '',
@@ -466,6 +459,7 @@ class ExpenseReports extends React.Component {
         // Add prompt fields if provided
         if (promptFields.email_to) {
             payload.prompt_mode = true;
+            payload.prompt_action_type = 'send_for_review';
             payload.prompt_email_to = promptFields.email_to;
             payload.prompt_cc = promptFields.cc || '';
             payload.prompt_subject = promptFields.subject || '';

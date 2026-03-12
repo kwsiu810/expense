@@ -193,26 +193,33 @@ class SharedReportView extends React.Component {
             if (rows[idx]) selectedData.push(rows[idx]);
         }
 
+        // Default button (id=0) always opens prompt
+        if (!configActionId || configActionId === 0) {
+            this.setState({
+                promptModal: { configActionId: 0, selectedData: selectedData, email_to: '', cc: '', subject: '', body: '' }
+            });
+            return;
+        }
+
+        // Find the action to check prompt_mode
         var actions = this.state.viewData ? this.state.viewData.actions || [] : [];
         var targetAction = null;
         for (var a = 0; a < actions.length; a++) {
             if (String(actions[a].id) === String(configActionId)) { targetAction = actions[a]; break; }
         }
 
-        var isPrompt = targetAction && (targetAction.prompt_mode === true || targetAction.prompt_mode === 't' || targetAction.prompt_mode === 'true' || targetAction.prompt_mode === 1);
+        var isPrompt = !targetAction ||
+            targetAction.prompt_mode === true || targetAction.prompt_mode === 't' ||
+            targetAction.prompt_mode === 'true' || targetAction.prompt_mode === 1;
+
         if (isPrompt) {
             this.setState({
-                promptModal: {
-                    configActionId: configActionId,
-                    selectedData: selectedData,
-                    email_to: '',
-                    subject: '',
-                    body: ''
-                }
+                promptModal: { configActionId: configActionId, selectedData: selectedData, email_to: '', cc: '', subject: '', body: '' }
             });
             return;
         }
 
+        // Non-prompt action with action module — send directly
         this.doSendAction(configActionId, selectedData, {});
     }
 
@@ -222,7 +229,7 @@ class SharedReportView extends React.Component {
 
         var payload = {
             config_id: data.config_id,
-            config_action_id: configActionId,
+            config_action_id: configActionId || 0,
             selected_rows: selectedData,
             employee_id: '',
             employee_name: data.created_by_email || '',
@@ -233,9 +240,10 @@ class SharedReportView extends React.Component {
             shared_view_token: data.token || ''
         };
 
-        if (promptFields.email_to) {
+        if (promptFields && promptFields.email_to) {
             payload.prompt_mode = true;
             payload.prompt_email_to = promptFields.email_to;
+            payload.prompt_cc = promptFields.cc || '';
             payload.prompt_subject = promptFields.subject || '';
             payload.prompt_body = promptFields.body || '';
         }
@@ -294,12 +302,7 @@ class SharedReportView extends React.Component {
         var data = this.state.viewData;
         var rows = data.rows || [];
         var columns = data.columns || [];
-        var allActions = data.actions || [];
-        // Filter out prompt_mode actions - shared view recipients shouldn't see those
-        var actions = [];
-        for (var fi = 0; fi < allActions.length; fi++) {
-            if (!allActions[fi].prompt_mode) actions.push(allActions[fi]);
-        }
+        var actions = data.actions || [];
         var hasAction = actions.length > 0;
         var selectedCount = Object.keys(this.state.selectedRows).length;
         var selectableCount = 0;
@@ -332,32 +335,47 @@ class SharedReportView extends React.Component {
                         <span><strong>Rows:</strong> {rows.length}</span>
                         {data.created_by_name && <span>&middot; <strong>Sent by:</strong> {data.created_by_name}</span>}
                         {data.created_date && <span>&middot; {new Date(data.created_date).toLocaleDateString()}</span>}
-                        {hasAction && selectedCount > 0 && <span>&middot; <strong>{selectedCount} selected</strong></span>}
+                        {selectedCount > 0 && <span>&middot; <strong>{selectedCount} selected</strong></span>}
                     </div>
 
-                    {/* Action bar */}
-                    {hasAction && selectedCount > 0 && (
+                    {/* Action bar - always show Send Email, plus any configured action buttons */}
+                    {selectedCount > 0 && (
                         <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px", padding: "10px 14px", borderRadius: "6px", background: "#fafbfc", border: "1px solid #e2e6ed", flexWrap: "wrap" }}>
-                            {actions.map((act, ai) => {
-                                var label = act.action_button_label || act.action_type || "Action " + (ai + 1);
-                                var colorIdx = this.getActionColorIndex(act.action_type);
-                                var color = ACTION_COLORS[colorIdx];
-                                return (
-                                    <button
-                                        key={act.id}
-                                        style={{
-                                            padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
-                                            background: color.bg, color: "#fff",
-                                            cursor: this.state.executingAction ? "not-allowed" : "pointer",
-                                            opacity: this.state.executingAction ? 0.6 : 1
-                                        }}
-                                        onClick={() => this.executeAction(act.id)}
-                                        disabled={this.state.executingAction}
-                                    >
-                                        {this.state.executingAction ? "Processing..." : label + " (" + selectedCount + ")"}
-                                    </button>
-                                );
-                            })}
+                            {actions.length > 0 ? (
+                                actions.map((act, ai) => {
+                                    var label = act.action_button_label || act.action_type || "Action " + (ai + 1);
+                                    var colorIdx = this.getActionColorIndex(act.action_type);
+                                    var color = ACTION_COLORS[colorIdx];
+                                    return (
+                                        <button
+                                            key={act.id}
+                                            style={{
+                                                padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
+                                                background: color.bg, color: "#fff",
+                                                cursor: this.state.executingAction ? "not-allowed" : "pointer",
+                                                opacity: this.state.executingAction ? 0.6 : 1
+                                            }}
+                                            onClick={() => this.executeAction(act.id)}
+                                            disabled={this.state.executingAction}
+                                        >
+                                            {this.state.executingAction ? "Processing..." : label + " (" + selectedCount + ")"}
+                                        </button>
+                                    );
+                                })
+                            ) : (
+                                <button
+                                    style={{
+                                        padding: "9px 18px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px",
+                                        background: "#052049", color: "#fff",
+                                        cursor: this.state.executingAction ? "not-allowed" : "pointer",
+                                        opacity: this.state.executingAction ? 0.6 : 1
+                                    }}
+                                    onClick={() => this.executeAction(0)}
+                                    disabled={this.state.executingAction}
+                                >
+                                    {this.state.executingAction ? "Processing..." : "\u2709 Send Email (" + selectedCount + ")"}
+                                </button>
+                            )}
                             <span style={{ fontSize: "12px", color: "#7c8ba1", cursor: "pointer", textDecoration: "underline" }} onClick={() => this.setState({ selectedRows: {} })}>Clear</span>
                         </div>
                     )}
@@ -385,11 +403,15 @@ class SharedReportView extends React.Component {
                             <div style={{ background: "#fff", borderRadius: "10px", padding: "28px", maxWidth: "520px", width: "90%", boxShadow: "0 8px 30px rgba(0,0,0,0.2)" }}
                                 onClick={(e) => e.stopPropagation()}
                             >
-                                <div style={{ fontSize: "16px", fontWeight: "700", color: "#052049", marginBottom: "4px" }}>Send to Recipient</div>
-                                <div style={{ fontSize: "12px", color: "#7c8ba1", marginBottom: "18px" }}>{this.state.promptModal.selectedData.length} row(s) selected</div>
+                                <div style={{ fontSize: "16px", fontWeight: "700", color: "#052049", marginBottom: "4px" }}>&#9993; Send Email</div>
+                                <div style={{ fontSize: "12px", color: "#7c8ba1", marginBottom: "18px" }}>{this.state.promptModal.selectedData.length} row(s) selected &middot; CSV will be attached</div>
                                 <div style={{ marginBottom: "12px" }}>
                                     <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Send To Email *</label>
                                     <input style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }} type="email" placeholder="recipient@ucsf.edu" autoFocus value={this.state.promptModal.email_to} onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { email_to: e.target.value }) })} />
+                                </div>
+                                <div style={{ marginBottom: "12px" }}>
+                                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>CC</label>
+                                    <input style={{ width: "100%", padding: "10px 12px", fontSize: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box" }} type="text" placeholder="cc1@ucsf.edu, cc2@ucsf.edu" value={this.state.promptModal.cc} onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { cc: e.target.value }) })} />
                                 </div>
                                 <div style={{ marginBottom: "12px" }}>
                                     <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Subject</label>
@@ -397,11 +419,14 @@ class SharedReportView extends React.Component {
                                 </div>
                                 <div style={{ marginBottom: "18px" }}>
                                     <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Body (optional)</label>
-                                    <textarea style={{ width: "100%", padding: "10px 12px", fontSize: "13px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box", minHeight: "80px", fontFamily: "inherit" }} placeholder="Optional message..." value={this.state.promptModal.body} onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { body: e.target.value }) })} />
+                                    <textarea style={{ width: "100%", padding: "10px 12px", fontSize: "13px", border: "1px solid #e2e6ed", borderRadius: "6px", boxSizing: "border-box", minHeight: "80px", fontFamily: "inherit", resize: "vertical" }} placeholder="Optional message..." value={this.state.promptModal.body} onChange={(e) => this.setState({ promptModal: Object.assign({}, this.state.promptModal, { body: e.target.value }) })} />
                                 </div>
                                 <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
                                     <button style={{ padding: "10px 20px", fontSize: "13px", fontWeight: "600", border: "1px solid #e2e6ed", borderRadius: "6px", background: "#fff", color: "#2c3345", cursor: "pointer" }} onClick={() => this.setState({ promptModal: null })}>Cancel</button>
-                                    <button style={{ padding: "10px 24px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px", background: this.state.promptModal.email_to ? "#052049" : "#ccc", color: "#fff", cursor: this.state.promptModal.email_to ? "pointer" : "not-allowed" }} disabled={!this.state.promptModal.email_to} onClick={() => { var pm = this.state.promptModal; this.doSendAction(pm.configActionId, pm.selectedData, { email_to: pm.email_to, subject: pm.subject, body: pm.body }); }}>Send Email</button>
+                                    <button style={{ padding: "10px 24px", fontSize: "13px", fontWeight: "700", border: "none", borderRadius: "6px", background: this.state.promptModal.email_to ? "#052049" : "#ccc", color: "#fff", cursor: this.state.promptModal.email_to ? "pointer" : "not-allowed" }}
+                                        disabled={!this.state.promptModal.email_to || this.state.executingAction}
+                                        onClick={() => { var pm = this.state.promptModal; this.doSendAction(pm.configActionId, pm.selectedData, { email_to: pm.email_to, cc: pm.cc, subject: pm.subject, body: pm.body }); }}
+                                    >{this.state.executingAction ? "Sending..." : "Send Email"}</button>
                                 </div>
                             </div>
                         </div>
@@ -412,7 +437,7 @@ class SharedReportView extends React.Component {
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", minWidth: "400px" }}>
                             <thead>
                                 <tr>
-                                    {hasAction && (
+                                    {(
                                         <th style={{ padding: "10px 8px", borderBottom: "2px solid #e2e6ed", background: "#052049", textAlign: "center", width: "36px" }}>
                                             <input type="checkbox" checked={allSelected} onChange={() => this.toggleSelectAll()} style={{ cursor: "pointer", width: "15px", height: "15px" }} />
                                         </th>
@@ -427,17 +452,17 @@ class SharedReportView extends React.Component {
                             <tbody>
                                 {rows.length === 0 ? (
                                     <tr>
-                                        <td colSpan={columns.length + (hasAction ? 1 : 0)} style={{ padding: "20px", textAlign: "center", color: "#7c8ba1", fontSize: "13px" }}>No rows.</td>
+                                        <td colSpan={columns.length + (1)} style={{ padding: "20px", textAlign: "center", color: "#7c8ba1", fontSize: "13px" }}>No rows.</td>
                                     </tr>
                                 ) : (
                                     rows.map((row, ri) => {
                                         var isRowSelected = this.state.selectedRows[ri] ? true : false;
-                                        var isActioned = hasAction && this.isRowActioned(row);
+                                        var isActioned = this.isRowActioned(row);
                                         var actionColor = isActioned ? this.getRowActionColor(row) : null;
                                         var rowBg = isActioned ? actionColor.light : (isRowSelected ? "#e8f0fe" : (ri % 2 === 0 ? "#fafbfc" : "#ffffff"));
                                         return (
                                             <tr key={ri}>
-                                                {hasAction && (
+                                                {(
                                                     <td style={{ padding: "8px 8px", borderBottom: "1px solid #e2e6ed", textAlign: "center", background: rowBg }}>
                                                         {isActioned ? (
                                                             <span style={{ fontSize: "14px", color: actionColor.check }}>&#10003;</span>

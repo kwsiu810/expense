@@ -16,14 +16,14 @@ var pool = new Pool({
 router.get('/', function(req, res, next) {
 
     var employeeInfo = {
-        employee_id: req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || '020444253',
-        employee_name: req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || 'Keith Siu',
-        employee_title: req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || 'Sr. Clinical Comm Analyst',
-        employee_department: req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || 'CS Clinical Communications'
+        employee_id: req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || '',
+        employee_name: req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || '',
+        employee_title: req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || '',
+        employee_department: req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || ''
     };
 
     pool.query(
-        'SELECT rc.id, rc.config_name, rc.expense_table_parent_id, rc.display_order, rc.created_date, rc.updated_date, et.name AS expense_name, (SELECT COUNT(*) FROM report_config_column rcc WHERE rcc.report_config_id = rc.id) AS column_count FROM report_config rc LEFT JOIN expense_table et ON et.id = rc.expense_table_parent_id ORDER BY rc.display_order, rc.created_date'
+        'SELECT rc.id, rc.config_name, rc.expense_table_parent_id, rc.display_order, rc.created_date, rc.updated_date, rc.source_type, rc.db_connection_id, rc.db_database, rc.db_schema, rc.db_table, rc.db_filter_conditions, et.name AS expense_name, (SELECT COUNT(*) FROM report_config_column rcc WHERE rcc.report_config_id = rc.id) AS column_count FROM report_config rc LEFT JOIN expense_table et ON et.id = rc.expense_table_parent_id ORDER BY rc.display_order, rc.created_date'
     )
     .then(function(configResult) {
         var configs = configResult.rows;
@@ -49,8 +49,28 @@ router.get('/', function(req, res, next) {
             res.json({ configs: configs, employee: employeeInfo });
         })
         .catch(function(err) {
-            console.log('Actions query failed:', err.message);
-            res.json({ configs: configs, employee: employeeInfo });
+            console.log('Actions query with prompt_mode failed, trying fallback:', err.message);
+            pool.query(
+                'SELECT rca.id, rca.report_config_id, rca.action_id, rca.action_type, rca.action_button_label, rca.action_column_mapping, rca.display_order, ra.action_name, ra.action_config FROM report_config_action rca LEFT JOIN report_action ra ON ra.id = rca.action_id WHERE rca.report_config_id = ANY($1) ORDER BY rca.display_order',
+                [configIds]
+            )
+            .then(function(fallbackResult) {
+                var actionMap = {};
+                for (var i = 0; i < fallbackResult.rows.length; i++) {
+                    var a = fallbackResult.rows[i];
+                    a.prompt_mode = false;
+                    if (!actionMap[a.report_config_id]) actionMap[a.report_config_id] = [];
+                    actionMap[a.report_config_id].push(a);
+                }
+                for (var i = 0; i < configs.length; i++) {
+                    configs[i].actions = actionMap[configs[i].id] || [];
+                }
+                res.json({ configs: configs, employee: employeeInfo });
+            })
+            .catch(function(err2) {
+                console.log('Fallback actions query also failed:', err2.message);
+                res.json({ configs: configs, employee: employeeInfo });
+            });
         });
     })
     .catch(function(err) {
@@ -70,7 +90,7 @@ router.get('/:id', async function(req, res, next) {
 
     try {
         var configResult = await pool.query(
-            'SELECT rc.id, rc.config_name, rc.expense_table_parent_id, rc.created_date, rc.updated_date, et.name AS expense_name FROM report_config rc LEFT JOIN expense_table et ON et.id = rc.expense_table_parent_id WHERE rc.id = $1',
+            'SELECT rc.id, rc.config_name, rc.expense_table_parent_id, rc.created_date, rc.updated_date, rc.source_type, rc.db_connection_id, rc.db_database, rc.db_schema, rc.db_table, rc.db_filter_conditions, et.name AS expense_name FROM report_config rc LEFT JOIN expense_table et ON et.id = rc.expense_table_parent_id WHERE rc.id = $1',
             [configId]
         );
 
@@ -112,15 +132,26 @@ router.post('/', async function(req, res, next) {
 
     try {
         var configName = req.body.config_name;
+        var sourceType = req.body.source_type || 'expense';
         var expenseTableParentId = req.body.expense_table_id;
         var columns = req.body.columns;
         var actions = req.body.actions || [];
 
+        // Database source fields
+        var dbConnectionId = req.body.db_connection_id || null;
+        var dbDatabase = req.body.db_database || '';
+        var dbSchema = req.body.db_schema || '';
+        var dbTable = req.body.db_table || '';
+        var dbFilterConditions = req.body.db_filter_conditions || [];
+
         if (!configName || !configName.trim()) {
             return res.status(400).json({ error: 'Configuration name is required' });
         }
-        if (!expenseTableParentId) {
+        if (sourceType === 'expense' && !expenseTableParentId) {
             return res.status(400).json({ error: 'Expense table ID is required' });
+        }
+        if (sourceType === 'database' && !dbConnectionId) {
+            return res.status(400).json({ error: 'Database connection is required' });
         }
         if (!columns || !Array.isArray(columns) || columns.length === 0) {
             return res.status(400).json({ error: 'At least one column must be selected' });
@@ -133,8 +164,8 @@ router.post('/', async function(req, res, next) {
         var nextOrder = orderResult.rows[0].next_order;
 
         var configResult = await client.query(
-            'INSERT INTO report_config (config_name, expense_table_parent_id, display_order, created_date, updated_date) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id',
-            [configName.trim(), parseInt(expenseTableParentId), nextOrder]
+            'INSERT INTO report_config (config_name, expense_table_parent_id, source_type, db_connection_id, db_database, db_schema, db_table, db_filter_conditions, display_order, created_date, updated_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()) RETURNING id',
+            [configName.trim(), sourceType === 'expense' ? parseInt(expenseTableParentId) : 0, sourceType, dbConnectionId ? parseInt(dbConnectionId) : null, dbDatabase, dbSchema, dbTable, JSON.stringify(dbFilterConditions), nextOrder]
         );
         var configId = configResult.rows[0].id;
 
@@ -183,14 +214,21 @@ router.put('/:id', async function(req, res, next) {
 
     try {
         var configName = req.body.config_name;
+        var sourceType = req.body.source_type || 'expense';
         var expenseTableParentId = req.body.expense_table_id;
         var columns = req.body.columns;
         var actions = req.body.actions || [];
 
+        var dbConnectionId = req.body.db_connection_id || null;
+        var dbDatabase = req.body.db_database || '';
+        var dbSchema = req.body.db_schema || '';
+        var dbTable = req.body.db_table || '';
+        var dbFilterConditions = req.body.db_filter_conditions || [];
+
         if (!configName || !configName.trim()) {
             return res.status(400).json({ error: 'Configuration name is required' });
         }
-        if (!expenseTableParentId) {
+        if (sourceType === 'expense' && !expenseTableParentId) {
             return res.status(400).json({ error: 'Expense table ID is required' });
         }
         if (!columns || !Array.isArray(columns) || columns.length === 0) {
@@ -209,8 +247,8 @@ router.put('/:id', async function(req, res, next) {
 
         // Update header
         await client.query(
-            'UPDATE report_config SET config_name = $1, expense_table_parent_id = $2, updated_date = NOW() WHERE id = $3',
-            [configName.trim(), parseInt(expenseTableParentId), configId]
+            'UPDATE report_config SET config_name = $1, expense_table_parent_id = $2, source_type = $3, db_connection_id = $4, db_database = $5, db_schema = $6, db_table = $7, db_filter_conditions = $8, updated_date = NOW() WHERE id = $9',
+            [configName.trim(), sourceType === 'expense' ? parseInt(expenseTableParentId) : 0, sourceType, dbConnectionId ? parseInt(dbConnectionId) : null, dbDatabase, dbSchema, dbTable, JSON.stringify(dbFilterConditions), configId]
         );
 
         // Replace columns: delete old, insert new

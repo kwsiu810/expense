@@ -8,6 +8,7 @@ const COMBINED_DATA_ENDPOINT = `${properties.backend}expense/get_combined_data/`
 const SAVE_ENDPOINT = `${properties.backend}expense/save_report_config`
 const DELETE_EXPENSE_ENDPOINT = `${properties.backend}expense/delete_expense/`
 const ACTIONS_ENDPOINT = `${properties.backend}expense/save_action`
+const DB_CONN_ENDPOINT = `${properties.backend}expense/db_connection`
 
 const desktopTopStyle = {
     width: "100%", backgroundColor: "#052049", color: "#ffffff", height: "40px", fontSize: "14px"
@@ -37,7 +38,25 @@ class ExpenseReportConfig extends React.Component {
             loadingActions: true,
             configActions: [],
             editingConfigId: null,
-            loadingEdit: false
+            loadingEdit: false,
+            // Source type
+            sourceType: 'expense',
+            // DB source state
+            dbConnections: [],
+            loadingConnections: false,
+            selectedConnectionId: "",
+            selectedConnection: null,
+            dbDatabases: [],
+            loadingDatabases: false,
+            selectedDatabase: "",
+            dbTables: [],
+            loadingTables: false,
+            selectedSchema: "",
+            selectedTable: "",
+            dbPreview: null,
+            loadingPreview: false,
+            dbAllColumns: [],
+            dbFilterConditions: []
         };
     }
 
@@ -66,64 +85,118 @@ class ExpenseReportConfig extends React.Component {
                 return;
             }
 
-            // Set expense selection and load its data
-            var parentId = config.expense_table_parent_id;
-            this.setState({ selectedExpense: String(parentId), configName: config.config_name || '' });
+            // Rebuild configActions from saved actions
+            var configActions = [];
+            var savedActions = config.actions || [];
+            for (var a = 0; a < savedActions.length; a++) {
+                var sa = savedActions[a];
+                var mapping = sa.action_column_mapping || {};
+                if (typeof mapping === 'string') { try { mapping = JSON.parse(mapping); } catch(e) { mapping = {}; } }
+                configActions.push({
+                    action_id: sa.action_id ? String(sa.action_id) : "",
+                    action_type: sa.action_type || "",
+                    action_button_label: sa.action_button_label || "",
+                    prompt_mode: sa.prompt_mode || false,
+                    email_to: mapping.email_to || "",
+                    subject_template: mapping.subject_template || "",
+                    body_template: mapping.body_template || ""
+                });
+            }
 
-            // Load the expense data, then apply saved column/filter/action state
-            fetch(COMBINED_DATA_ENDPOINT + parentId, {
-                method: "GET",
-                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-            })
-            .then(r => r.json())
-            .then(data => {
-                var columns = data.columns || [];
+            var sourceType = config.source_type || 'expense';
 
-                // Rebuild selectedColumns and filterColumns from saved config
-                var selectedColumns = {};
-                var filterColumns = {};
-                var savedCols = config.columns || [];
-                for (var i = 0; i < savedCols.length; i++) {
-                    selectedColumns[savedCols[i].column_name] = savedCols[i].display_order;
-                    if (savedCols[i].is_filter) {
-                        filterColumns[savedCols[i].column_name] = true;
-                    }
-                }
-
-                // Rebuild configActions from saved actions
-                var configActions = [];
-                var savedActions = config.actions || [];
-                for (var a = 0; a < savedActions.length; a++) {
-                    var sa = savedActions[a];
-                    var mapping = sa.action_column_mapping || {};
-                    if (typeof mapping === 'string') { try { mapping = JSON.parse(mapping); } catch(e) { mapping = {}; } }
-                    configActions.push({
-                        action_id: sa.action_id ? String(sa.action_id) : "",
-                        action_type: sa.action_type || "",
-                        action_button_label: sa.action_button_label || "",
-                        prompt_mode: sa.prompt_mode || false,
-                        email_to: mapping.email_to || "",
-                        subject_template: mapping.subject_template || "",
-                        body_template: mapping.body_template || ""
-                    });
-                }
+            if (sourceType === 'database') {
+                // DB source: load connection, set DB state, then fetch columns from external DB
+                var filterConds = config.db_filter_conditions || [];
+                if (typeof filterConds === 'string') { try { filterConds = JSON.parse(filterConds); } catch(e) { filterConds = []; } }
 
                 this.setState({
-                    columns: columns,
-                    rows: data.rows || [],
-                    versions: data.versions || [],
-                    totalRows: data.total_rows || 0,
-                    selectedColumns: selectedColumns,
-                    filterColumns: filterColumns,
-                    configActions: configActions,
-                    loadingEdit: false,
-                    loadingData: false
+                    sourceType: 'database',
+                    selectedConnectionId: String(config.db_connection_id || ''),
+                    selectedDatabase: config.db_database || '',
+                    selectedSchema: config.db_schema || '',
+                    selectedTable: config.db_table || '',
+                    dbFilterConditions: filterConds,
+                    configName: config.config_name || '',
+                    configActions: configActions
                 });
-            })
-            .catch(err => {
-                console.log("Failed to load expense data for edit:", err);
-                this.setState({ loadingEdit: false });
-            });
+
+                // Fetch connection details, then fetch table preview to get columns
+                if (config.db_connection_id) {
+                    this.fetchDbConnections();
+                    fetch(DB_CONN_ENDPOINT + '/' + config.db_connection_id, { method: "GET", headers: { 'Content-Type': 'application/json' } })
+                    .then(r => r.json())
+                    .then(conn => {
+                        this.setState({ selectedConnection: conn });
+                        // Fetch table preview to get columns
+                        fetch(DB_CONN_ENDPOINT + '/preview', {
+                            method: "POST", headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(Object.assign({}, conn, { database: config.db_database, schema: config.db_schema, table: config.db_table }))
+                        })
+                        .then(r => r.json())
+                        .then(preview => {
+                            var allCols = preview.columns || [];
+                            var columns = allCols.map(function(c) { return { column_name: c, data_type: 'string' }; });
+
+                            // Rebuild selectedColumns and filterColumns
+                            var selectedColumns = {};
+                            var filterColumns = {};
+                            var savedCols = config.columns || [];
+                            for (var i = 0; i < savedCols.length; i++) {
+                                selectedColumns[savedCols[i].column_name] = savedCols[i].display_order;
+                                if (savedCols[i].is_filter) filterColumns[savedCols[i].column_name] = true;
+                            }
+
+                            this.setState({
+                                dbAllColumns: allCols,
+                                columns: columns,
+                                selectedColumns: selectedColumns,
+                                filterColumns: filterColumns,
+                                dbPreview: preview,
+                                loadingEdit: false
+                            });
+                        });
+                    });
+                } else {
+                    this.setState({ loadingEdit: false });
+                }
+            } else {
+                // Expense source: original logic
+                var parentId = config.expense_table_parent_id;
+                this.setState({ sourceType: 'expense', selectedExpense: String(parentId), configName: config.config_name || '' });
+
+                fetch(COMBINED_DATA_ENDPOINT + parentId, {
+                    method: "GET",
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+                })
+                .then(r => r.json())
+                .then(data => {
+                    var columns = data.columns || [];
+                    var selectedColumns = {};
+                    var filterColumns = {};
+                    var savedCols = config.columns || [];
+                    for (var i = 0; i < savedCols.length; i++) {
+                        selectedColumns[savedCols[i].column_name] = savedCols[i].display_order;
+                        if (savedCols[i].is_filter) filterColumns[savedCols[i].column_name] = true;
+                    }
+
+                    this.setState({
+                        columns: columns,
+                        rows: data.rows || [],
+                        versions: data.versions || [],
+                        totalRows: data.total_rows || 0,
+                        selectedColumns: selectedColumns,
+                        filterColumns: filterColumns,
+                        configActions: configActions,
+                        loadingEdit: false,
+                        loadingData: false
+                    });
+                })
+                .catch(err => {
+                    console.log("Failed to load expense data for edit:", err);
+                    this.setState({ loadingEdit: false });
+                });
+            }
         })
         .catch(err => {
             console.log("Failed to load config for edit:", err);
@@ -324,8 +397,12 @@ class ExpenseReportConfig extends React.Component {
             this.setState({ result: { type: "error", message: "Please enter a configuration name." } });
             return;
         }
-        if (!this.state.selectedExpense) {
+        if (this.state.sourceType === 'expense' && !this.state.selectedExpense) {
             this.setState({ result: { type: "error", message: "Please select an expense type." } });
+            return;
+        }
+        if (this.state.sourceType === 'database' && !this.state.selectedConnectionId) {
+            this.setState({ result: { type: "error", message: "Please select a database connection." } });
             return;
         }
         if (selectedCount === 0) {
@@ -364,7 +441,13 @@ class ExpenseReportConfig extends React.Component {
 
         var payload = {
             config_name: this.state.configName.trim(),
-            expense_table_id: parseInt(this.state.selectedExpense),
+            source_type: this.state.sourceType,
+            expense_table_id: this.state.sourceType === 'expense' ? parseInt(this.state.selectedExpense) : 0,
+            db_connection_id: this.state.sourceType === 'database' ? parseInt(this.state.selectedConnectionId) : null,
+            db_database: this.state.selectedDatabase || '',
+            db_schema: this.state.selectedSchema || '',
+            db_table: this.state.selectedTable || '',
+            db_filter_conditions: this.state.dbFilterConditions || [],
             columns: configColumns,
             actions: this.state.configActions.map(function(a) {
                 return {
@@ -433,45 +516,237 @@ class ExpenseReportConfig extends React.Component {
         return result;
     }
 
+    // ===================== DB SOURCE METHODS =====================
+
+    fetchDbConnections() {
+        this.setState({ loadingConnections: true });
+        fetch(DB_CONN_ENDPOINT, { method: "GET", headers: { 'Content-Type': 'application/json' } })
+        .then(r => r.json())
+        .then(data => this.setState({ dbConnections: Array.isArray(data) ? data : [], loadingConnections: false }))
+        .catch(() => this.setState({ dbConnections: [], loadingConnections: false }));
+    }
+
+    selectDbConnection(connId) {
+        if (!connId) { this.setState({ selectedConnectionId: "", selectedConnection: null, dbDatabases: [], dbTables: [], selectedDatabase: "", selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [] }); return; }
+        this.setState({ selectedConnectionId: connId, selectedConnection: null, dbDatabases: [], dbTables: [], selectedDatabase: "", selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [], loadingDatabases: true });
+
+        fetch(DB_CONN_ENDPOINT + '/' + connId, { method: "GET", headers: { 'Content-Type': 'application/json' } })
+        .then(r => r.json())
+        .then(conn => {
+            this.setState({ selectedConnection: conn });
+            fetch(DB_CONN_ENDPOINT + '/databases', { method: "POST", headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(conn) })
+            .then(r => r.json())
+            .then(dbs => this.setState({ dbDatabases: Array.isArray(dbs) ? dbs : [], loadingDatabases: false }))
+            .catch(() => this.setState({ dbDatabases: [], loadingDatabases: false }));
+        })
+        .catch(() => this.setState({ loadingDatabases: false }));
+    }
+
+    selectDbDatabase(dbName) {
+        if (!dbName) { this.setState({ selectedDatabase: "", dbTables: [], selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [] }); return; }
+        this.setState({ selectedDatabase: dbName, dbTables: [], selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [], loadingTables: true });
+
+        fetch(DB_CONN_ENDPOINT + '/tables', { method: "POST", headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, this.state.selectedConnection, { database: dbName })) })
+        .then(r => r.json())
+        .then(tables => this.setState({ dbTables: Array.isArray(tables) ? tables : [], loadingTables: false }))
+        .catch(() => this.setState({ dbTables: [], loadingTables: false }));
+    }
+
+    selectDbTable(schemaTable) {
+        if (!schemaTable) { this.setState({ selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [] }); return; }
+        var parts = schemaTable.split('.'); var schema = parts[0]; var table = parts[1];
+        this.setState({ selectedSchema: schema, selectedTable: table, dbPreview: null, dbAllColumns: [], columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, dbFilterConditions: [], loadingPreview: true });
+
+        fetch(DB_CONN_ENDPOINT + '/preview', { method: "POST", headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({}, this.state.selectedConnection, { database: this.state.selectedDatabase, schema: schema, table: table })) })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { this.setState({ loadingPreview: false, result: { type: "error", message: data.error } }); return; }
+            var allCols = data.columns || [];
+            // Create column objects and auto-select all, auto-assign display_order
+            var columns = allCols.map(function(c, i) { return { column_name: c, data_type: 'string' }; });
+            var selectedColumns = {};
+            for (var i = 0; i < allCols.length; i++) { selectedColumns[allCols[i]] = i + 1; }
+            // Convert preview rows to objects keyed by column name (for the data preview table)
+            var previewRows = (data.rows || []).map(function(row) {
+                var mapped = {};
+                for (var k = 0; k < allCols.length; k++) {
+                    mapped[allCols[k]] = row[allCols[k]] !== null && row[allCols[k]] !== undefined ? String(row[allCols[k]]) : '';
+                }
+                return mapped;
+            });
+            this.setState({ dbPreview: data, dbAllColumns: allCols, columns: columns, rows: previewRows, totalRows: data.total_rows || 0, selectedColumns: selectedColumns, filterColumns: {}, loadingPreview: false });
+        })
+        .catch(err => this.setState({ loadingPreview: false, result: { type: "error", message: err.message } }));
+    }
+
+    addDbFilterCondition() {
+        var conditions = this.state.dbFilterConditions.slice();
+        conditions.push({ column: this.state.dbAllColumns[0] || '', operator: '=', value: '' });
+        this.setState({ dbFilterConditions: conditions });
+    }
+
+    updateDbFilterCondition(index, field, value) {
+        var conditions = this.state.dbFilterConditions.slice();
+        conditions[index] = Object.assign({}, conditions[index]);
+        conditions[index][field] = value;
+        this.setState({ dbFilterConditions: conditions });
+    }
+
+    removeDbFilterCondition(index) {
+        var conditions = this.state.dbFilterConditions.slice();
+        conditions.splice(index, 1);
+        this.setState({ dbFilterConditions: conditions });
+    }
+
     renderExpenseSelection() {
-        var hasSelection = this.state.selectedExpense !== "";
+        var isEditing = !!this.state.editingConfigId;
         return (
             <div style={{ padding: "20px", background: "#ffffff", border: "1px solid #e2e6ed", borderRadius: "6px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
                     <span style={stepNumStyle}>1</span>
-                    <span style={{ fontSize: "16px", fontWeight: "600" }}>Select Expense Type</span>
+                    <span style={{ fontSize: "16px", fontWeight: "600" }}>Select Data Source</span>
                 </div>
-                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-                    <select
-                        style={Object.assign({}, selectStyle, { flex: 1 })}
-                        value={this.state.selectedExpense}
-                        onChange={(e) => this.handleExpenseChange(e.target.value)}
-                        disabled={this.state.loadingExpenses || this.state.deletingExpense || !!this.state.editingConfigId}
-                    >
-                        <option value="">{this.state.loadingExpenses ? "Loading expenses..." : "\u2014 Select an expense type \u2014"}</option>
-                        {this.state.expenses.map((exp) => (
-                            <option key={exp.id} value={exp.id}>{exp.name}</option>
-                        ))}
-                    </select>
-                    {hasSelection && !this.state.editingConfigId && (
-                        <button
-                            style={{
-                                padding: "11px 18px", fontSize: "13px", fontWeight: "600", border: "none", borderRadius: "6px", cursor: this.state.deletingExpense ? "not-allowed" : "pointer",
-                                background: this.state.confirmDeleteExpense ? "#d64545" : "#fdf0f0",
-                                color: this.state.confirmDeleteExpense ? "#ffffff" : "#d64545",
-                                whiteSpace: "nowrap", transition: "all 0.15s"
-                            }}
-                            onClick={() => this.handleDeleteExpense()}
-                            disabled={this.state.deletingExpense}
-                        >
-                            {this.state.deletingExpense ? "Deleting..." : (this.state.confirmDeleteExpense ? "Confirm Delete" : "Delete Expense")}
-                        </button>
-                    )}
+
+                {/* Source toggle */}
+                <div style={{ display: "flex", marginBottom: "14px", border: "1px solid #e2e6ed", borderRadius: "6px", overflow: "hidden", width: "fit-content" }}>
+                    <button style={{ padding: "9px 20px", fontSize: "13px", fontWeight: "600", border: "none", cursor: isEditing ? "default" : "pointer", background: this.state.sourceType === 'expense' ? "#052049" : "#ffffff", color: this.state.sourceType === 'expense' ? "#ffffff" : "#7c8ba1" }}
+                        onClick={() => { if (!isEditing) this.setState({ sourceType: 'expense', columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, configName: "", configActions: [], selectedConnectionId: "", selectedConnection: null, dbDatabases: [], dbTables: [], selectedDatabase: "", selectedTable: "", selectedSchema: "", dbPreview: null, dbAllColumns: [], dbFilterConditions: [], result: null }); }}>Expense Data</button>
+                    <button style={{ padding: "9px 20px", fontSize: "13px", fontWeight: "600", border: "none", cursor: isEditing ? "default" : "pointer", background: this.state.sourceType === 'database' ? "#052049" : "#ffffff", color: this.state.sourceType === 'database' ? "#ffffff" : "#7c8ba1" }}
+                        onClick={() => { if (!isEditing) { this.setState({ sourceType: 'database', columns: [], rows: [], totalRows: 0, selectedColumns: {}, filterColumns: {}, configName: "", configActions: [], selectedExpense: "", result: null }); if (this.state.dbConnections.length === 0) this.fetchDbConnections(); } }}>External Database</button>
                 </div>
-                {this.state.confirmDeleteExpense && (
-                    <div style={{ marginTop: "10px", padding: "10px 14px", borderRadius: "6px", background: "#fdf0f0", border: "1px solid #f0c2c2", fontSize: "12px", color: "#d64545", display: "flex", alignItems: "center", gap: "8px" }}>
-                        <span style={{ fontWeight: "700" }}>&#9888;</span>
-                        <span>This will permanently delete this expense type, all uploaded data, column definitions, and any related report configurations. Click <strong>Confirm Delete</strong> to proceed or select a different expense to cancel.</span>
+
+                {/* Expense source */}
+                {this.state.sourceType === 'expense' && (
+                    <div>
+                        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                            <select style={Object.assign({}, selectStyle, { flex: 1 })} value={this.state.selectedExpense}
+                                onChange={(e) => this.handleExpenseChange(e.target.value)}
+                                disabled={this.state.loadingExpenses || this.state.deletingExpense || isEditing}>
+                                <option value="">{this.state.loadingExpenses ? "Loading expenses..." : "\u2014 Select an expense type \u2014"}</option>
+                                {this.state.expenses.map((exp) => (<option key={exp.id} value={exp.id}>{exp.name}</option>))}
+                            </select>
+                            {this.state.selectedExpense && !isEditing && (
+                                <button style={{ padding: "11px 18px", fontSize: "13px", fontWeight: "600", border: "none", borderRadius: "6px", cursor: this.state.deletingExpense ? "not-allowed" : "pointer",
+                                    background: this.state.confirmDeleteExpense ? "#d64545" : "#fdf0f0", color: this.state.confirmDeleteExpense ? "#ffffff" : "#d64545", whiteSpace: "nowrap" }}
+                                    onClick={() => this.handleDeleteExpense()} disabled={this.state.deletingExpense}>
+                                    {this.state.deletingExpense ? "Deleting..." : (this.state.confirmDeleteExpense ? "Confirm Delete" : "Delete Expense")}
+                                </button>
+                            )}
+                        </div>
+                        {this.state.confirmDeleteExpense && (
+                            <div style={{ marginTop: "10px", padding: "10px 14px", borderRadius: "6px", background: "#fdf0f0", border: "1px solid #f0c2c2", fontSize: "12px", color: "#d64545" }}>
+                                <strong>&#9888;</strong> This will permanently delete this expense type and all related data.
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Database source */}
+                {this.state.sourceType === 'database' && (
+                    <div>
+                        {/* Connection */}
+                        <div style={{ marginBottom: "10px" }}>
+                            <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Database Connection</label>
+                            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                <select style={Object.assign({}, selectStyle, { flex: 1 })} value={this.state.selectedConnectionId}
+                                    onChange={(e) => this.selectDbConnection(e.target.value)} disabled={this.state.loadingConnections || isEditing}>
+                                    <option value="">{this.state.loadingConnections ? "Loading..." : "\u2014 Select a connection \u2014"}</option>
+                                    {this.state.dbConnections.map((c) => (<option key={c.id} value={c.id}>{c.connection_name} ({c.db_type === 'mssql' ? 'MSSQL' : 'PostgreSQL'})</option>))}
+                                </select>
+                                <a href="/db-connection-config" style={{ fontSize: "12px", color: "#052049", fontWeight: "600", whiteSpace: "nowrap" }}>Manage</a>
+                            </div>
+                        </div>
+
+                        {/* Database */}
+                        {this.state.selectedConnectionId && (
+                            <div style={{ marginBottom: "10px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Database</label>
+                                <select style={selectStyle} value={this.state.selectedDatabase}
+                                    onChange={(e) => this.selectDbDatabase(e.target.value)} disabled={this.state.loadingDatabases || isEditing}>
+                                    <option value="">{this.state.loadingDatabases ? "Loading databases..." : "\u2014 Select a database \u2014"}</option>
+                                    {this.state.dbDatabases.map((db) => (<option key={db} value={db}>{db}</option>))}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* Table */}
+                        {this.state.selectedDatabase && (
+                            <div style={{ marginBottom: "10px" }}>
+                                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#052049", marginBottom: "4px" }}>Table</label>
+                                <select style={selectStyle}
+                                    value={this.state.selectedSchema && this.state.selectedTable ? this.state.selectedSchema + '.' + this.state.selectedTable : ""}
+                                    onChange={(e) => this.selectDbTable(e.target.value)} disabled={this.state.loadingTables || isEditing}>
+                                    <option value="">{this.state.loadingTables ? "Loading tables..." : "\u2014 Select a table \u2014"}</option>
+                                    {this.state.dbTables.map((t, i) => (<option key={i} value={t.schema + '.' + t.table}>{t.schema}.{t.table}</option>))}
+                                </select>
+                            </div>
+                        )}
+
+                        {/* Preview */}
+                        {this.state.loadingPreview && <div style={{ padding: "10px", color: "#7c8ba1", fontSize: "13px" }}>Loading preview...</div>}
+                        {this.state.dbPreview && !this.state.loadingPreview && (
+                            <div style={{ marginTop: "8px", fontSize: "12px", color: "#7c8ba1" }}>
+                                {this.state.dbPreview.columns.length} columns &middot; {this.state.dbPreview.total_rows} total rows in table
+                            </div>
+                        )}
+
+                        {/* Filter conditions - stored in config, applied at query time */}
+                        {this.state.dbAllColumns.length > 0 && (
+                            <div style={{ marginTop: "14px", padding: "12px", background: "#f8f9fb", borderRadius: "6px", border: "1px solid #e2e6ed" }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                                    <span style={{ fontSize: "13px", fontWeight: "700", color: "#052049" }}>
+                                        Row Filters {this.state.dbFilterConditions.length > 0 ? '(' + this.state.dbFilterConditions.length + ')' : ''}
+                                    </span>
+                                    <div style={{ display: "flex", gap: "10px" }}>
+                                        {this.state.dbFilterConditions.length > 0 && (
+                                            <span style={{ fontSize: "12px", color: "#d64545", fontWeight: "600", cursor: "pointer", textDecoration: "underline" }}
+                                                onClick={() => this.setState({ dbFilterConditions: [] })}>Clear All</span>
+                                        )}
+                                        <span style={{ fontSize: "12px", color: "#052049", fontWeight: "600", cursor: "pointer", textDecoration: "underline" }}
+                                            onClick={() => this.addDbFilterCondition()}>+ Add Condition</span>
+                                    </div>
+                                </div>
+
+                                {this.state.dbFilterConditions.length === 0 && (
+                                    <div style={{ fontSize: "12px", color: "#7c8ba1" }}>No filters. All rows will be included in reports.</div>
+                                )}
+
+                                {this.state.dbFilterConditions.map((cond, fi) => {
+                                    var noVal = cond.operator === 'is_empty' || cond.operator === 'is_not_empty';
+                                    return (
+                                        <div key={fi} style={{ display: "flex", gap: "6px", alignItems: "center", marginBottom: "6px", flexWrap: "wrap" }}>
+                                            {fi > 0 && <span style={{ fontSize: "11px", fontWeight: "700", color: "#7c8ba1", width: "32px", textAlign: "center", flexShrink: 0 }}>AND</span>}
+                                            {fi === 0 && <span style={{ width: "32px", flexShrink: 0 }}></span>}
+                                            <select style={{ padding: "7px 8px", fontSize: "12px", border: "1px solid #d0dff5", borderRadius: "5px", color: "#052049", fontWeight: "600", minWidth: "120px" }}
+                                                value={cond.column} onChange={(e) => this.updateDbFilterCondition(fi, 'column', e.target.value)}>
+                                                {this.state.dbAllColumns.map((h, hi) => (<option key={hi} value={h}>{h}</option>))}
+                                            </select>
+                                            <select style={{ padding: "7px 8px", fontSize: "12px", border: "1px solid #d0dff5", borderRadius: "5px", color: "#2c3345", minWidth: "120px" }}
+                                                value={cond.operator} onChange={(e) => this.updateDbFilterCondition(fi, 'operator', e.target.value)}>
+                                                <option value="=">equals (=)</option>
+                                                <option value="!=">not equals</option>
+                                                <option value=">">greater than</option>
+                                                <option value=">=">greater or equal</option>
+                                                <option value="<">less than</option>
+                                                <option value="<=">less or equal</option>
+                                                <option value="contains">contains</option>
+                                                <option value="not_contains">not contains</option>
+                                                <option value="starts_with">starts with</option>
+                                                <option value="ends_with">ends with</option>
+                                                <option value="is_empty">is empty</option>
+                                                <option value="is_not_empty">is not empty</option>
+                                            </select>
+                                            {!noVal && (
+                                                <input type="text" placeholder="value..." style={{ padding: "7px 10px", fontSize: "12px", border: "1px solid #d0dff5", borderRadius: "5px", flex: "1 1 100px", minWidth: "80px", boxSizing: "border-box" }}
+                                                    value={cond.value} onChange={(e) => this.updateDbFilterCondition(fi, 'value', e.target.value)} />
+                                            )}
+                                            <span style={{ fontSize: "16px", color: "#d64545", cursor: "pointer", fontWeight: "700", width: "20px", textAlign: "center" }}
+                                                onClick={() => this.removeDbFilterCondition(fi)}>&times;</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
@@ -479,7 +754,10 @@ class ExpenseReportConfig extends React.Component {
     }
 
     renderDataPreview() {
-        if (!this.state.selectedExpense) return null;
+        // Show for expense source or database source when columns are loaded
+        var hasSource = (this.state.sourceType === 'expense' && this.state.selectedExpense) ||
+                        (this.state.sourceType === 'database' && this.state.dbAllColumns.length > 0);
+        if (!hasSource) return null;
 
         if (this.state.loadingData) {
             return (

@@ -374,7 +374,12 @@ class ExpenseReportPreview extends React.Component {
                                 <div style={{ flex: 1 }}>
                                     <div style={{ fontSize: "14px", fontWeight: "600", color: "#2c3345" }}>{cfg.config_name}</div>
                                     <div style={{ fontSize: "12px", color: "#7c8ba1", marginTop: "2px" }}>
-                                        Expense: {cfg.expense_name || "Unknown"} &middot; {cfg.column_count} columns &middot; {this.formatDate(cfg.created_date)}
+                                        {cfg.source_type === 'database' ? (
+                                            <span>Database: {cfg.db_schema}.{cfg.db_table}</span>
+                                        ) : (
+                                            <span>Expense: {cfg.expense_name || "Unknown"}</span>
+                                        )}
+                                        {' '}&middot; {cfg.column_count} columns &middot; {this.formatDate(cfg.created_date)}
                                     </div>
                                     {cfg.actions && cfg.actions.length > 0 && (
                                         <div style={{ marginTop: "4px", display: "flex", flexDirection: "column", gap: "3px" }}>
@@ -388,8 +393,9 @@ class ExpenseReportPreview extends React.Component {
                                                         <span><strong>{act.action_button_label || act.action_name || "Action " + (ai + 1)}</strong></span>
                                                         <span style={{ color: "#7c8ba1" }}>({act.action_type})</span>
                                                         {act.prompt_mode && <span style={{ padding: "1px 6px", background: "#fff3cd", color: "#856404", borderRadius: "3px", fontSize: "10px", fontWeight: "600" }}>PROMPT</span>}
-                                                        {mapping.email_to && !act.prompt_mode && <span>&middot; To: {mapping.email_to}</span>}
-                                                        {mapping.subject_template && !act.prompt_mode && <span>&middot; Subject: "{mapping.subject_template}"</span>}
+                                                        {act.action_id && mapping.email_to && !act.prompt_mode && <span>&middot; To: {mapping.email_to}</span>}
+                                                        {act.action_id && mapping.subject_template && !act.prompt_mode && <span>&middot; Subject: "{mapping.subject_template}"</span>}
+                                                        {!act.action_id && <span style={{ color: "#b45309", fontSize: "10px" }}>&middot; No action module</span>}
                                                     </div>
                                                 );
                                             })}

@@ -236,18 +236,15 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
     var selectedRows = req.body.selected_rows || req.body.rows || [];
 
     // Read employee info from session headers (try multiple formats), fallback to request body
-    var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '';
-    var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || '';
-    var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || '';
-    var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || '';
-
+    var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '020444253';
+    var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || 'Keith Siu';
+    var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || 'Sr. Clinical Comm Analyst';
+    var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || 'CS Clinical Communications';
+    
     console.log('Send email - employee info:', { employeeId, employeeName, employeeTitle, employeeDepartment });
 
     if (isNaN(configId)) {
         return res.status(400).json({ error: 'Invalid config ID' });
-    }
-    if (isNaN(configActionId)) {
-        return res.status(400).json({ error: 'Invalid config action ID' });
     }
     if (selectedRows.length === 0) {
         return res.status(400).json({ error: 'No rows selected' });
@@ -261,17 +258,57 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
         }
         var reportName = configResult.rows[0].config_name || 'Expense Report';
 
-        // 2. Get the specific config action with its module credentials
-        var actionResult = await pool.query(
-            'SELECT rca.id, rca.action_id, rca.action_type, rca.action_button_label, rca.action_column_mapping, rca.prompt_mode, ra.action_name, ra.action_config FROM report_config_action rca LEFT JOIN report_action ra ON ra.id = rca.action_id WHERE rca.id = $1 AND rca.report_config_id = $2',
-            [configActionId, configId]
-        );
-
-        if (actionResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Action not found for this report config' });
+        // Helper to check if action_config has valid credentials
+        function hasValidCredentials(row) {
+            if (!row || !row.action_config) return false;
+            var cfg = row.action_config;
+            if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch(e) { return false; } }
+            return cfg.client_id && cfg.client_secret && cfg.tenant_id && cfg.sender_email;
         }
 
-        var actionRow = actionResult.rows[0];
+        // 2. Find the action row (for action_type, column_mapping, etc.)
+        var actionRow = null;
+
+        // Step A: try the specific config_action_id
+        if (configActionId && !isNaN(configActionId) && configActionId > 0) {
+            var actionResult = await pool.query(
+                'SELECT rca.id, rca.action_id, rca.action_type, rca.action_button_label, rca.action_column_mapping, rca.prompt_mode, ra.action_name, ra.action_config FROM report_config_action rca LEFT JOIN report_action ra ON ra.id = rca.action_id WHERE rca.id = $1 AND rca.report_config_id = $2',
+                [configActionId, configId]
+            );
+            if (actionResult.rows.length > 0) {
+                actionRow = actionResult.rows[0];
+            }
+        }
+
+        // Step B: try any config action for this report
+        if (!actionRow) {
+            var fallbackResult = await pool.query(
+                'SELECT rca.id, rca.action_id, rca.action_type, rca.action_button_label, rca.action_column_mapping, rca.prompt_mode, ra.action_name, ra.action_config FROM report_config_action rca LEFT JOIN report_action ra ON ra.id = rca.action_id WHERE rca.report_config_id = $1 ORDER BY rca.display_order LIMIT 1',
+                [configId]
+            );
+            if (fallbackResult.rows.length > 0) {
+                actionRow = fallbackResult.rows[0];
+                configActionId = actionRow.id;
+            }
+        }
+
+        // Step C: try any action module in the system
+        if (!actionRow) {
+            var anyActionResult = await pool.query(
+                'SELECT id AS action_id, action_name, action_config, \'send_email\' AS action_type FROM report_action ORDER BY id LIMIT 1'
+            );
+            if (anyActionResult.rows.length > 0) {
+                actionRow = anyActionResult.rows[0];
+                actionRow.action_column_mapping = '{}';
+                actionRow.prompt_mode = true;
+                configActionId = 0;
+            }
+        }
+
+        // Step D: create a minimal action row for log-only actions
+        if (!actionRow) {
+            actionRow = { action_type: 'action', action_column_mapping: '{}', prompt_mode: false, action_config: '{}' };
+        }
 
         var actionConfig = actionRow.action_config || {};
         var columnMapping = actionRow.action_column_mapping || {};
@@ -282,13 +319,9 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             try { actionConfig = JSON.parse(actionConfig); } catch (e) { actionConfig = {}; }
         }
 
-        // Validate credentials
-        if (!actionConfig.client_id || !actionConfig.client_secret || !actionConfig.tenant_id || !actionConfig.sender_email) {
-            return res.status(400).json({ error: 'Email action is missing Microsoft Graph API credentials. Please configure in Action settings.' });
-        }
-
         // Determine recipient and templates
         var isPromptMode = actionRow.prompt_mode || req.body.prompt_mode || false;
+        var hasActionModule = actionRow.action_id ? true : false;
         var fixedEmailTo, subjectTemplate, bodyTemplate;
 
         if (isPromptMode) {
@@ -296,10 +329,16 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             fixedEmailTo = req.body.prompt_email_to || '';
             subjectTemplate = req.body.prompt_subject || 'Expense Report Data';
             bodyTemplate = req.body.prompt_body || '';
-        } else {
+        } else if (hasActionModule) {
+            // Only use configured email when action module is linked
             fixedEmailTo = columnMapping.email_to || "";
             subjectTemplate = columnMapping.subject_template || "Expense Report Data";
             bodyTemplate = columnMapping.body_template || "";
+        } else {
+            // No action module — log only, no email
+            fixedEmailTo = "";
+            subjectTemplate = "";
+            bodyTemplate = "";
         }
 
         // Parse CC emails (comma-separated)
@@ -310,10 +349,82 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             if (isPromptMode) {
                 return res.status(400).json({ error: 'This action requires you to provide an email address. The prompt dialog should have appeared — please try again.' });
             }
-            return res.status(400).json({ error: 'No recipient email configured. Please set the Send To Email in Report Configuration.' });
+
+            // No email configured and not prompt mode — just log the action without sending email
+            var cleanRows = [];
+            var fullDataRows = [];
+            for (var nr = 0; nr < selectedRows.length; nr++) {
+                var row = selectedRows[nr];
+                var clean = {};
+                var keys = Object.keys(row);
+                for (var nk = 0; nk < keys.length; nk++) {
+                    if (keys[nk] !== '_full_data' && keys[nk] !== '_content_id') {
+                        clean[keys[nk]] = row[keys[nk]];
+                    }
+                }
+                cleanRows.push(clean);
+                fullDataRows.push(row._full_data || clean);
+            }
+
+            var sharedViewToken = req.body.shared_view_token || null;
+            var loggedHashes = [];
+            for (var li = 0; li < cleanRows.length; li++) {
+                var rowHash = hashRow(cleanRows[li]);
+                try {
+                    await pool.query(
+                        'INSERT INTO report_action_log (report_config_id, report_config_action_id, employee_id, employee_name, employee_title, employee_department, row_hash, row_data, action_type, shared_view_token) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+                        [configId, configActionId || null, employeeId, employeeName, employeeTitle, employeeDepartment, rowHash, JSON.stringify(fullDataRows[li]), req.body.prompt_action_type || actionRow.action_type || 'send_email', sharedViewToken]
+                    );
+                    loggedHashes.push(rowHash);
+                } catch (logErr) {
+                    console.log('Failed to log action for row ' + (li + 1) + ':', logErr.message);
+                }
+            }
+
+            return res.json({
+                message: 'Action "' + (req.body.prompt_action_type || actionRow.action_type || 'action') + '" logged for ' + cleanRows.length + ' row(s).',
+                sent: 0,
+                failed: 0,
+                errors: [],
+                logged_hashes: loggedHashes,
+                shared_link: null
+            });
         }
 
-        // 3. Get access token
+        // 3. We have an email to send — find valid credentials
+        // The actionRow might not have credentials (no module linked), so find one that does
+        if (!hasValidCredentials(actionRow)) {
+            // Try any config action for this report with credentials
+            var credResult = await pool.query(
+                'SELECT rca.id, ra.action_config FROM report_config_action rca LEFT JOIN report_action ra ON ra.id = rca.action_id WHERE rca.report_config_id = $1 ORDER BY rca.display_order',
+                [configId]
+            );
+            var foundCreds = false;
+            for (var ci = 0; ci < credResult.rows.length; ci++) {
+                if (hasValidCredentials(credResult.rows[ci])) {
+                    actionConfig = credResult.rows[ci].action_config;
+                    if (typeof actionConfig === 'string') { try { actionConfig = JSON.parse(actionConfig); } catch(e) {} }
+                    foundCreds = true;
+                    break;
+                }
+            }
+            // Try any action module in the system
+            if (!foundCreds) {
+                var anyCred = await pool.query('SELECT action_config FROM report_action ORDER BY id');
+                for (var ac = 0; ac < anyCred.rows.length; ac++) {
+                    if (hasValidCredentials(anyCred.rows[ac])) {
+                        actionConfig = anyCred.rows[ac].action_config;
+                        if (typeof actionConfig === 'string') { try { actionConfig = JSON.parse(actionConfig); } catch(e) {} }
+                        foundCreds = true;
+                        break;
+                    }
+                }
+            }
+            if (!foundCreds) {
+                return res.status(400).json({ error: 'No email action module with valid credentials found. Please configure Graph API credentials in the Actions tab.' });
+            }
+        }
+
         var accessToken = await getAccessToken(actionConfig.tenant_id, actionConfig.client_id, actionConfig.client_secret);
 
         // Separate _full_data and _content_id from display columns
@@ -366,7 +477,7 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
             try {
                 await pool.query(
                     'INSERT INTO report_shared_view (token, report_config_id, report_config_action_id, row_data, columns, config_name, created_by_name, created_by_email, created_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())',
-                    [sharedToken, configId, configActionId, JSON.stringify(cleanRows), JSON.stringify(colResult.rows), reportName, employeeName || '', fixedEmailTo]
+                    [sharedToken, configId, configActionId || null, JSON.stringify(cleanRows), JSON.stringify(colResult.rows), reportName, employeeName || '', fixedEmailTo]
                 );
                 var baseUrl = req.body.base_url || (req.protocol + '://' + req.get('host'));
                 sharedLink = baseUrl + '/expense-shared/' + sharedToken;
@@ -424,7 +535,7 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
                 try {
                     await pool.query(
                         'INSERT INTO report_action_log (report_config_id, report_config_action_id, employee_id, employee_name, employee_title, employee_department, row_hash, row_data, action_type, shared_view_token) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-                        [configId, configActionId, employeeId, employeeName, employeeTitle, employeeDepartment, rowHash, JSON.stringify(fullDataRows[i]), req.body.prompt_action_type || actionRow.action_type || 'send_email', sharedViewToken]
+                        [configId, configActionId || null, employeeId, employeeName, employeeTitle, employeeDepartment, rowHash, JSON.stringify(fullDataRows[i]), req.body.prompt_action_type || actionRow.action_type || 'send_email', sharedViewToken]
                     );
                     loggedHashes.push(rowHash);
                 } catch (logErr) {
