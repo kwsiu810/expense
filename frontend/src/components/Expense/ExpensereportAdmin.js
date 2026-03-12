@@ -1,5 +1,6 @@
 import React from "react"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
 
 const CONFIGS_ENDPOINT = `${properties.backend}expense/save_report_config`
@@ -665,6 +666,9 @@ class ExpenseReportAdmin extends React.Component {
                         </div>
                     </div>
                 </div>
+
+                {/* Nav */}
+                <ExpenseNav activeKey="admin" />
 
                 {/* Report tabs */}
                 {this.renderTabs()}

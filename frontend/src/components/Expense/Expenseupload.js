@@ -1,5 +1,6 @@
 import React from "react"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
 
 const EXPENSES_ENDPOINT = `${properties.backend}expense/get_expense_table`
@@ -711,14 +712,7 @@ class ExpenseUpload extends React.Component {
                         <div style={{ float: "left", marginLeft: "30px", fontFamily: "Arial", fontSize: "18px", height: "100px", display: "grid" }}><span style={{ margin: "auto" }}>- Expense Upload</span></div>
                     </div>
                 </div>
-                <div style={{ display: "flex", gap: "0px", background: "#f0f2f5", borderBottom: "2px solid #e2e6ed", padding: "0 4%" }}>
-                    <span style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "700", color: "#ffffff", background: "#052049", cursor: "default", borderBottom: "2px solid #052049" }}>Upload</span>
-                    <a href="/expense-report-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Configuration</a>
-                    <a href="/action-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Actions</a>
-                    <a href="/db-connection-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>DB Connections</a>
-                    <a href="/expense-report-preview" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Preview</a>
-                    <a href="/expense-reports" target="_blank" rel="noopener noreferrer" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Reports</a>
-                </div>
+                <ExpenseNav activeKey="upload" />
                 <div style={{ maxWidth: "760px", margin: "40px auto", padding: "0 20px" }}>
                     {this.renderSourceToggle()}
                     {this.renderCsvUpload()}

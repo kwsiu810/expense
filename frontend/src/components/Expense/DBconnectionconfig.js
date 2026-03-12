@@ -1,5 +1,6 @@
 import React from "react"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensesupernav.js'
 import { properties } from '../../properties/properties.js'
 
 const ENDPOINT = `${properties.backend}expense/db_connection`
@@ -168,14 +169,7 @@ class DbConnectionConfig extends React.Component {
                 </div>
 
                 {/* Nav */}
-                <div style={{ display: "flex", gap: "0px", background: "#f0f2f5", borderBottom: "2px solid #e2e6ed", padding: "0 4%" }}>
-                    <a href="/expense-upload" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Upload</a>
-                    <a href="/expense-report-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Configuration</a>
-                    <a href="/action-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Actions</a>
-                    <span style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "700", color: "#ffffff", background: "#052049", borderBottom: "2px solid #052049" }}>DB Connections</span>
-                    <a href="/expense-report-preview" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Preview</a>
-                    <a href="/expense-reports" target="_blank" rel="noopener noreferrer" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", borderBottom: "2px solid transparent" }}>Reports</a>
-                </div>
+                <ExpenseNav activeKey="db-connections" />
 
                 <div style={{ maxWidth: "900px", margin: "30px auto", padding: "0 20px" }}>
 

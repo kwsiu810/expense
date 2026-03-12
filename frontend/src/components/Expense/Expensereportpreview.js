@@ -1,5 +1,6 @@
 import React from "react"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
 
 const CONFIGS_ENDPOINT = `${properties.backend}expense/save_report_config`
@@ -624,13 +625,7 @@ class ExpenseReportPreview extends React.Component {
         );
 
         content.push(
-            <div key="nav" style={{ display: "flex", gap: "0px", background: "#f0f2f5", borderBottom: "2px solid #e2e6ed", padding: "0 4%" }}>
-                <a href="/expense-upload" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Upload</a>
-                <a href="/expense-report-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Configuration</a>
-                <a href="/action-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Actions</a>
-                <span style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "700", color: "#ffffff", background: "#052049", cursor: "default", borderBottom: "2px solid #052049" }}>Preview</span>
-                <a href="/expense-reports" target="_blank" rel="noopener noreferrer" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Reports</a>
-            </div>
+            <ExpenseNav key="nav" activeKey="preview" />
         );
 
         content.push(

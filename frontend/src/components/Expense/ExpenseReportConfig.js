@@ -1,5 +1,6 @@
 import React from "react"
 import ucsfLogo from './images/ucsfHealth.jpg'
+import ExpenseNav from './Expensenav.js'
 import { properties } from '../../properties/properties.js'
 
 const EXPENSES_ENDPOINT = `${properties.backend}expense/get_expense_table`
@@ -864,13 +865,7 @@ class ExpenseReportConfig extends React.Component {
         );
 
         content.push(
-            <div key="nav" style={{ display: "flex", gap: "0px", background: "#f0f2f5", borderBottom: "2px solid #e2e6ed", padding: "0 4%" }}>
-                <a href="/expense-upload" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Upload</a>
-                <span style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "700", color: "#ffffff", background: "#052049", cursor: "default", borderBottom: "2px solid #052049" }}>Configuration</span>
-                <a href="/action-config" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Actions</a>
-                <a href="/expense-report-preview" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Preview</a>
-                <a href="/expense-reports" target="_blank" rel="noopener noreferrer" style={{ padding: "12px 20px", fontSize: "13px", fontWeight: "600", color: "#052049", textDecoration: "none", cursor: "pointer", borderBottom: "2px solid transparent" }}>Reports</a>
-            </div>
+            <ExpenseNav key="nav" activeKey="configuration" />
         );
 
         content.push(
