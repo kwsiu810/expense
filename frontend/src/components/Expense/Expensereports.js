@@ -44,9 +44,12 @@ class ExpenseReports extends React.Component {
             actionedHashes: {},
             actionLogCache: {},
             employeeInfo: {},
-            promptModal: null
+            promptModal: null,
+            filterOpen: null,
+            filterSearch: {}
         };
         this.tableRef = React.createRef();
+        this._closeFilter = (e) => { if (this.state.filterOpen && !e.target.closest('.searchable-filter')) this.setState({ filterOpen: null }); };
     }
 
     // djb2 hash matching backend - strips internal fields
@@ -100,10 +103,12 @@ class ExpenseReports extends React.Component {
         this.fetchConfigs();
         this._handleResize = () => this.checkScrollButtons();
         window.addEventListener('resize', this._handleResize);
+        document.addEventListener('mousedown', this._closeFilter);
     }
 
     componentWillUnmount() {
         window.removeEventListener('resize', this._handleResize);
+        document.removeEventListener('mousedown', this._closeFilter);
     }
 
     fetchConfigs() {
@@ -506,7 +511,7 @@ class ExpenseReports extends React.Component {
     }
 
     clearAllFilters() {
-        this.setState({ filters: {} });
+        this.setState({ filters: {}, filterOpen: null, filterSearch: {} });
     }
 
     renderTabs() {
@@ -575,26 +580,62 @@ class ExpenseReports extends React.Component {
                     {filterColumns.map((col) => {
                         var options = this.getFilterOptions(col.column_name);
                         var isActive = this.state.filters[col.column_name] ? true : false;
+                        var isOpen = this.state.filterOpen === col.column_name;
+                        var searchText = this.state.filterSearch[col.column_name] || '';
+                        var filteredOpts = options;
+                        if (searchText) {
+                            var lower = searchText.toLowerCase();
+                            filteredOpts = options.filter(function(o) { return o.toLowerCase().indexOf(lower) !== -1; });
+                        }
+                        var displayVal = isActive ? this.state.filters[col.column_name] : '';
                         return (
-                            <div key={col.column_name} style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "180px", flex: "1 1 180px", maxWidth: "300px" }}>
+                            <div key={col.column_name} className="searchable-filter" style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "180px", flex: "1 1 180px", maxWidth: "300px", position: "relative" }}>
                                 <label style={{ fontSize: "12px", fontWeight: "600", color: "#052049" }}>
                                     {col.column_name}
                                 </label>
-                                <select
-                                    style={{
-                                        padding: "7px 10px", fontSize: "13px", borderRadius: "5px",
-                                        border: isActive ? "2px solid #052049" : "1px solid #e2e6ed",
-                                        background: isActive ? "#f0f5ff" : "#ffffff",
-                                        color: "#2c3345"
-                                    }}
-                                    value={this.state.filters[col.column_name] || ""}
-                                    onChange={(e) => this.handleFilterChange(col.column_name, e.target.value)}
-                                >
-                                    <option value="">Show All ({options.length})</option>
-                                    {options.map((opt) => (
-                                        <option key={opt} value={opt}>{opt}</option>
-                                    ))}
-                                </select>
+                                <div style={{ position: "relative" }}>
+                                    <input
+                                        type="text"
+                                        style={{
+                                            width: "100%", padding: "7px 28px 7px 10px", fontSize: "13px", borderRadius: "5px", boxSizing: "border-box",
+                                            border: isActive ? "2px solid #052049" : "1px solid #e2e6ed",
+                                            background: isActive ? "#f0f5ff" : "#ffffff",
+                                            color: "#2c3345"
+                                        }}
+                                        placeholder={"Show All (" + options.length + ")"}
+                                        value={isOpen ? searchText : displayVal}
+                                        onFocus={() => { var fs = Object.assign({}, this.state.filterSearch); fs[col.column_name] = ''; this.setState({ filterOpen: col.column_name, filterSearch: fs }); }}
+                                        onChange={(e) => { var fs = Object.assign({}, this.state.filterSearch); fs[col.column_name] = e.target.value; this.setState({ filterSearch: fs }); }}
+                                    />
+                                    {isActive && (
+                                        <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", fontSize: "14px", color: "#d64545", cursor: "pointer", fontWeight: "700", lineHeight: "1" }}
+                                            onClick={(e) => { e.stopPropagation(); this.handleFilterChange(col.column_name, ''); this.setState({ filterOpen: null }); }}>&times;</span>
+                                    )}
+                                </div>
+                                {isOpen && (
+                                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100, background: "#fff", border: "1px solid #e2e6ed", borderRadius: "5px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: "220px", overflowY: "auto", marginTop: "2px" }}>
+                                        <div style={{ padding: "6px 10px", fontSize: "12px", color: "#7c8ba1", cursor: "pointer", borderBottom: "1px solid #f0f0f0" }}
+                                            onClick={() => { this.handleFilterChange(col.column_name, ''); this.setState({ filterOpen: null }); }}>
+                                            Show All ({options.length})
+                                        </div>
+                                        {filteredOpts.length === 0 ? (
+                                            <div style={{ padding: "10px", fontSize: "12px", color: "#7c8ba1", textAlign: "center" }}>No matches</div>
+                                        ) : (
+                                            filteredOpts.map((opt) => {
+                                                var isSelected = this.state.filters[col.column_name] === opt;
+                                                return (
+                                                    <div key={opt}
+                                                        style={{ padding: "6px 10px", fontSize: "12px", cursor: "pointer", color: isSelected ? "#052049" : "#2c3345", fontWeight: isSelected ? "600" : "400", background: isSelected ? "#f0f5ff" : "transparent" }}
+                                                        onMouseEnter={(e) => { e.target.style.background = "#f0f5ff"; }}
+                                                        onMouseLeave={(e) => { e.target.style.background = isSelected ? "#f0f5ff" : "transparent"; }}
+                                                        onClick={() => { this.handleFilterChange(col.column_name, opt); this.setState({ filterOpen: null }); }}>
+                                                        {opt}
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}

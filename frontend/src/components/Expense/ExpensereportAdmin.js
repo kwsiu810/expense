@@ -7,6 +7,7 @@ import { properties } from '../../properties/properties.js'
 const CONFIGS_ENDPOINT = `${properties.backend}expense/save_report_config`
 const PREVIEW_ENDPOINT = `${properties.backend}expense/get_report_preview/`
 const ACTION_LOG_ENDPOINT = `${properties.backend}expense/send_email/logs/`
+const DELETE_LOG_ENDPOINT = `${properties.backend}expense/send_email/logs/`
 const EXECUTE_ENDPOINT = `${properties.backend}expense/send_email`
 
 const ACTION_COLORS = [
@@ -47,9 +48,13 @@ class ExpenseReportAdmin extends React.Component {
             // Email
             executingAction: false,
             actionResult: null,
-            promptModal: null
+            promptModal: null,
+            filterOpen: null,
+            filterSearch: {},
+            deleteConfirmLogId: null
         };
         this.tableRef = React.createRef();
+        this._closeFilter = (e) => { if (this.state.filterOpen && !e.target.closest('.searchable-filter')) this.setState({ filterOpen: null }); };
     }
 
     // djb2 hash matching backend
@@ -71,6 +76,11 @@ class ExpenseReportAdmin extends React.Component {
 
     componentDidMount() {
         this.fetchConfigs();
+        document.addEventListener('mousedown', this._closeFilter);
+    }
+
+    componentWillUnmount() {
+        document.removeEventListener('mousedown', this._closeFilter);
     }
 
     fetchConfigs() {
@@ -142,6 +152,7 @@ class ExpenseReportAdmin extends React.Component {
                 var h = logs[i].row_hash;
                 if (!byHash[h]) byHash[h] = [];
                 byHash[h].push({
+                    id: logs[i].id,
                     employee_name: logs[i].employee_name || '—',
                     employee_id: logs[i].employee_id || '',
                     employee_title: logs[i].employee_title || '',
@@ -183,7 +194,7 @@ class ExpenseReportAdmin extends React.Component {
 
             newFilters = this.validateFilters(newFilters, data);
 
-            this.setState({ activeConfigId: configId, reportData: data, filters: newFilters, expandedRows: {}, selectedRows: {}, actionResult: null }, () => {
+            this.setState({ activeConfigId: configId, reportData: data, filters: newFilters, expandedRows: {}, selectedRows: {}, actionResult: null, filterOpen: null, filterSearch: {} }, () => {
                 setTimeout(() => this.checkScrollButtons(), 100);
                 this.fetchActionLogs(configId);
             });
@@ -304,7 +315,7 @@ class ExpenseReportAdmin extends React.Component {
     }
 
     clearAllFilters() {
-        this.setState({ filters: {} });
+        this.setState({ filters: {}, filterOpen: null, filterSearch: {} });
     }
 
     getActionColorIndex(actionType) {
@@ -504,6 +515,18 @@ class ExpenseReportAdmin extends React.Component {
         setTimeout(() => this.checkScrollButtons(), 350);
     }
 
+    deleteActionLog(logId) {
+        fetch(DELETE_LOG_ENDPOINT + logId, { method: "DELETE", headers: { 'Content-Type': 'application/json' } })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { this.setState({ actionResult: { type: "error", message: data.error }, deleteConfirmLogId: null }); return; }
+            this.setState({ deleteConfirmLogId: null }, () => {
+                this.fetchActionLogs(this.state.activeConfigId);
+            });
+        })
+        .catch(err => this.setState({ actionResult: { type: "error", message: err.message }, deleteConfirmLogId: null }));
+    }
+
     formatDate(dateStr) {
         if (!dateStr) return '—';
         var d = new Date(dateStr);
@@ -576,26 +599,62 @@ class ExpenseReportAdmin extends React.Component {
                     {filterColumns.map((col) => {
                         var options = this.getFilterOptions(col.column_name);
                         var isActive = this.state.filters[col.column_name] ? true : false;
+                        var isOpen = this.state.filterOpen === col.column_name;
+                        var searchText = this.state.filterSearch[col.column_name] || '';
+                        var filteredOpts = options;
+                        if (searchText) {
+                            var lower = searchText.toLowerCase();
+                            filteredOpts = options.filter(function(o) { return o.toLowerCase().indexOf(lower) !== -1; });
+                        }
+                        var displayVal = isActive ? this.state.filters[col.column_name] : '';
                         return (
-                            <div key={col.column_name} style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "180px", flex: "1 1 180px", maxWidth: "300px" }}>
+                            <div key={col.column_name} className="searchable-filter" style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "180px", flex: "1 1 180px", maxWidth: "300px", position: "relative" }}>
                                 <label style={{ fontSize: "12px", fontWeight: "600", color: "#052049" }}>
                                     {col.column_name}
                                 </label>
-                                <select
-                                    style={{
-                                        padding: "7px 10px", fontSize: "13px", borderRadius: "5px",
-                                        border: isActive ? "2px solid #052049" : "1px solid #e2e6ed",
-                                        background: isActive ? "#f0f5ff" : "#ffffff",
-                                        color: "#2c3345"
-                                    }}
-                                    value={this.state.filters[col.column_name] || ""}
-                                    onChange={(e) => this.handleFilterChange(col.column_name, e.target.value)}
-                                >
-                                    <option value="">Show All ({options.length})</option>
-                                    {options.map((opt) => (
-                                        <option key={opt} value={opt}>{opt}</option>
-                                    ))}
-                                </select>
+                                <div style={{ position: "relative" }}>
+                                    <input
+                                        type="text"
+                                        style={{
+                                            width: "100%", padding: "7px 28px 7px 10px", fontSize: "13px", borderRadius: "5px", boxSizing: "border-box",
+                                            border: isActive ? "2px solid #052049" : "1px solid #e2e6ed",
+                                            background: isActive ? "#f0f5ff" : "#ffffff",
+                                            color: "#2c3345"
+                                        }}
+                                        placeholder={"Show All (" + options.length + ")"}
+                                        value={isOpen ? searchText : displayVal}
+                                        onFocus={() => { var fs = Object.assign({}, this.state.filterSearch); fs[col.column_name] = ''; this.setState({ filterOpen: col.column_name, filterSearch: fs }); }}
+                                        onChange={(e) => { var fs = Object.assign({}, this.state.filterSearch); fs[col.column_name] = e.target.value; this.setState({ filterSearch: fs }); }}
+                                    />
+                                    {isActive && (
+                                        <span style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", fontSize: "14px", color: "#d64545", cursor: "pointer", fontWeight: "700", lineHeight: "1" }}
+                                            onClick={(e) => { e.stopPropagation(); this.handleFilterChange(col.column_name, ''); this.setState({ filterOpen: null }); }}>&times;</span>
+                                    )}
+                                </div>
+                                {isOpen && (
+                                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100, background: "#fff", border: "1px solid #e2e6ed", borderRadius: "5px", boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: "220px", overflowY: "auto", marginTop: "2px" }}>
+                                        <div style={{ padding: "6px 10px", fontSize: "12px", color: "#7c8ba1", cursor: "pointer", borderBottom: "1px solid #f0f0f0" }}
+                                            onClick={() => { this.handleFilterChange(col.column_name, ''); this.setState({ filterOpen: null }); }}>
+                                            Show All ({options.length})
+                                        </div>
+                                        {filteredOpts.length === 0 ? (
+                                            <div style={{ padding: "10px", fontSize: "12px", color: "#7c8ba1", textAlign: "center" }}>No matches</div>
+                                        ) : (
+                                            filteredOpts.map((opt) => {
+                                                var isSelected = this.state.filters[col.column_name] === opt;
+                                                return (
+                                                    <div key={opt}
+                                                        style={{ padding: "6px 10px", fontSize: "12px", cursor: "pointer", color: isSelected ? "#052049" : "#2c3345", fontWeight: isSelected ? "600" : "400", background: isSelected ? "#f0f5ff" : "transparent" }}
+                                                        onMouseEnter={(e) => { e.target.style.background = "#f0f5ff"; }}
+                                                        onMouseLeave={(e) => { e.target.style.background = isSelected ? "#f0f5ff" : "transparent"; }}
+                                                        onClick={() => { this.handleFilterChange(col.column_name, opt); this.setState({ filterOpen: null }); }}>
+                                                        {opt}
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
@@ -828,6 +887,7 @@ class ExpenseReportAdmin extends React.Component {
                                                                     <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Title</th>
                                                                     <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Department</th>
                                                                     <th style={{ padding: "6px 10px", textAlign: "left", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap" }}>Date</th>
+                                                                    <th style={{ padding: "6px 10px", textAlign: "center", color: "#7c8ba1", fontWeight: "600", whiteSpace: "nowrap", width: "40px" }}></th>
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
@@ -849,6 +909,23 @@ class ExpenseReportAdmin extends React.Component {
                                                                             <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{log.employee_title || "\u2014"}</td>
                                                                             <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{log.employee_department || "\u2014"}</td>
                                                                             <td style={{ padding: "7px 10px", color: "#7c8ba1", whiteSpace: "nowrap" }}>{this.formatDate(log.created_date)}</td>
+                                                                            <td style={{ padding: "7px 10px", textAlign: "center", whiteSpace: "nowrap" }}>
+                                                                                {this.state.deleteConfirmLogId === log.id ? (
+                                                                                    <span style={{ display: "inline-flex", gap: "4px", alignItems: "center" }}>
+                                                                                        <span style={{ fontSize: "10px", color: "#d64545", fontWeight: "600" }}>Delete?</span>
+                                                                                        <span style={{ fontSize: "11px", color: "#fff", background: "#d64545", padding: "1px 8px", borderRadius: "3px", cursor: "pointer", fontWeight: "700" }}
+                                                                                            onClick={(e) => { e.stopPropagation(); this.deleteActionLog(log.id); }}>Yes</span>
+                                                                                        <span style={{ fontSize: "11px", color: "#7c8ba1", cursor: "pointer", fontWeight: "600" }}
+                                                                                            onClick={(e) => { e.stopPropagation(); this.setState({ deleteConfirmLogId: null }); }}>No</span>
+                                                                                    </span>
+                                                                                ) : (
+                                                                                    <span style={{ fontSize: "14px", color: "#d64545", cursor: "pointer", fontWeight: "700", opacity: 0.5 }}
+                                                                                        onMouseEnter={(e) => { e.target.style.opacity = 1; }}
+                                                                                        onMouseLeave={(e) => { e.target.style.opacity = 0.5; }}
+                                                                                        onClick={(e) => { e.stopPropagation(); this.setState({ deleteConfirmLogId: log.id }); }}
+                                                                                        title="Delete this action log">&times;</span>
+                                                                                )}
+                                                                            </td>
                                                                         </tr>
                                                                     );
                                                                 })}

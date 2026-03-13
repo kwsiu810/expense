@@ -31,7 +31,7 @@ app.use(cors());
 
 
 app.use('/expense/db_connection', require('./routes/Expense/Dbconnection'));
-
+app.use('/expense/form_entry', require('./routes/Expense/Formentry'));
 
 
 var getExpenseTableRouter = require('./routes/Expense/getExpenseTable')

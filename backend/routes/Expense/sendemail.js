@@ -202,7 +202,7 @@ router.get('/logs/:config_id', async function(req, res, next) {
     var configActionId = req.query.config_action_id || '';
 
     try {
-        var query = 'SELECT row_hash, employee_id, employee_name, employee_title, employee_department, action_type, report_config_action_id, created_date FROM report_action_log WHERE report_config_id = $1';
+        var query = 'SELECT id, row_hash, employee_id, employee_name, employee_title, employee_department, action_type, report_config_action_id, created_date FROM report_action_log WHERE report_config_id = $1';
         var params = [configId];
         var paramIdx = 2;
 
@@ -227,6 +227,24 @@ router.get('/logs/:config_id', async function(req, res, next) {
     }
 });
 
+// DELETE /expense/send_email/logs/:log_id - delete a single action log entry
+router.delete('/logs/:log_id', async function(req, res, next) {
+    var logId = parseInt(req.params.log_id);
+    if (isNaN(logId)) {
+        return res.status(400).json({ error: 'Invalid log ID' });
+    }
+    try {
+        var result = await pool.query('DELETE FROM report_action_log WHERE id = $1 RETURNING id', [logId]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Action log not found' });
+        }
+        res.json({ message: 'Action log deleted.' });
+    } catch (err) {
+        console.log('Delete action log error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /expense/send_email
 // Body: { config_id, rows: [ { col1: val1, col2: val2, ... }, ... ] }
 router.post('/', express.json({ limit: '50mb' }), async function(req, res, next) {
@@ -236,11 +254,11 @@ router.post('/', express.json({ limit: '50mb' }), async function(req, res, next)
     var selectedRows = req.body.selected_rows || req.body.rows || [];
 
     // Read employee info from session headers (try multiple formats), fallback to request body
-    var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '020444253';
-    var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || 'Keith Siu';
-    var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || 'Sr. Clinical Comm Analyst';
-    var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || 'CS Clinical Communications';
-    
+    var employeeId = req.headers['employee_id'] || req.headers['employeeid'] || req.headers['employee-id'] || req.headers['Employee_Id'] || req.body.employee_id || '';
+    var employeeName = req.headers['employee_name'] || req.headers['employeename'] || req.headers['employee-name'] || req.headers['Employee_Name'] || req.body.employee_name || '';
+    var employeeTitle = req.headers['employee_title'] || req.headers['employeetitle'] || req.headers['employee-title'] || req.headers['Employee_Title'] || req.body.employee_title || '';
+    var employeeDepartment = req.headers['employee_department'] || req.headers['employeedepartment'] || req.headers['employee-department'] || req.headers['Employee_Department'] || req.body.employee_department || '';
+
     console.log('Send email - employee info:', { employeeId, employeeName, employeeTitle, employeeDepartment });
 
     if (isNaN(configId)) {

@@ -2,7 +2,8 @@ import React from "react"
 
 const NAV_ITEMS = [
     { key: "actions", label: "Actions", path: "/action-config" },
-    { key: "db-connections", label: "DB Connections", path: "/db-connection-config" }
+    { key: "db-connections", label: "DB Connections", path: "/db-connection-config" },
+    { key: "form-builder", label: "Form Builder", path: "/form-builder" }
 ];
 
 function ExpenseNav(props) {

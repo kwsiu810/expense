@@ -8,6 +8,8 @@ import ActionConfig from './components/Expense/Actionconfig'
 import SharedReportView from './components/Expense/SharedReportView';
 import ExpenseReportAdmin from './components/Expense/ExpensereportAdmin';
 import DbConnectionConfig from './components/Expense/DBconnectionconfig';
+import FormBuilder from './components/Expense/Formbuilder';
+import FormEntry from './components/Expense/Formentry';
 
 function App() {
   /*
@@ -39,6 +41,9 @@ function App() {
   return (
     <main>
         <Switch>
+
+          <Route path="/form-builder" component={FormBuilder} />
+<Route path="/form-entry/:id" component={FormEntry} />
     <Route path="/db-connection-config" component={DbConnectionConfig} />
 
           <Route path="/expense-report-admin" component={ExpenseReportAdmin} />
